@@ -40,10 +40,10 @@ pub struct AppSwitcher {
     surface_id:   WindowId,
     test_deadline: Option<Instant>,
     finished:     bool,
-    /// Animated scale of the selected card: it grows by `SELECTED_GROWTH` so the
-    /// highlight is visible while the modifier key is still held. Values above 1.0 are
-    /// interpreted by `ui` as "how far the selection animation has travelled".
-    pub hover:    f32,
+    /// Per-card selection animation progress, indexed like `entries`. Each card owns its
+    /// own value so the card that loses focus can shrink smoothly at the same time as the
+    /// newly focused one bounces up, instead of snapping back to its resting size.
+    pub hover:    Vec<f32>,
     /// Timestamp of the previous animation tick (for frame-rate independent easing).
     pub last_tick: Instant,
     /// Keys replayed so far from `COSMIC_SWITCHER_TEST_KEYS`.
@@ -113,7 +113,8 @@ impl Application for AppSwitcher {
         let n = entries.len();
         let selected = if reverse { n.saturating_sub(1) } else { 1.min(n.saturating_sub(1)) };
 
-        let metrics = Metrics::fit(&style, screen, n);
+        let titles: Vec<String> = entries.iter().map(|e| e.title.clone()).collect();
+        let metrics = Metrics::fit(&style, screen, n, &titles);
 
         // The surface is sized to the panel (plus room for the selection growing), and
         // the content inside it is centred on both axes, which is what puts the panel in
@@ -176,7 +177,7 @@ impl Application for AppSwitcher {
             surface_id,
             test_deadline: test.map(|d| Instant::now() + d),
             finished: false,
-            hover: 0.0,
+            hover: Vec::new(),
             last_tick: Instant::now(),
             injected: Vec::new(),
             hovered: None,
@@ -193,25 +194,17 @@ impl Application for AppSwitcher {
         match msg {
             Message::SelectNext => {
                 self.selected = (self.selected + 1) % n;
-                self.hover = 0.0;
             }
             Message::SelectPrev => {
                 self.selected = (self.selected + n - 1) % n;
-                self.hover = 0.0;
             }
             Message::SelectIndex(i) => {
-                if i.min(n - 1) != self.selected {
-                    self.hover = 0.0;
-                }
                 self.selected = i.min(n - 1);
             }
             Message::MoveRow(delta) => {
                 let cols = self.metrics.cols.max(1) as isize;
                 let target = self.selected as isize + delta * cols;
                 let next = target.clamp(0, n as isize - 1) as usize;
-                if next != self.selected {
-                    self.hover = 0.0;
-                }
                 self.selected = next;
             }
             Message::InjectKey => {
@@ -243,7 +236,13 @@ impl Application for AppSwitcher {
             Message::AnimTick => {
                 let dt = (Instant::now() - self.last_tick).as_secs_f32().clamp(0.0, 0.1);
                 self.last_tick = Instant::now();
-                self.hover = Animation::step(self.hover, 1.0, dt);
+                // Grow the newly selected card, shrink every other one. Both directions
+                // run on the same tick so the hand-off between two cards is continuous.
+                self.hover.resize(n, 0.0);
+                for (i, value) in self.hover.iter_mut().enumerate() {
+                    let target = if i == self.selected { 1.0 } else { 0.0 };
+                    *value = Animation::step(*value, target, dt);
+                }
             }
             Message::CloseIndex(i) => {
                 if self.finished || i >= n {
@@ -399,7 +398,9 @@ impl Application for AppSwitcher {
         };
 
         // Drive the selection "pop" animation until it settles.
-        let anim_sub = if Animation::settled(self.hover) {
+        // Note: an empty `hover` (just before the first tick) must count as *unsettled*,
+        // otherwise `all()` returns true and the animation never starts at all.
+        let anim_sub = if self.hover.len() >= self.entries.len() && self.hover.iter().all(|v| Animation::settled(*v)) {
             Subscription::none()
         } else {
             cosmic::iced::time::every(Duration::from_millis(16)).map(|_| Message::AnimTick)

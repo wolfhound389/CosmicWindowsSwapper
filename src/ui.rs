@@ -14,15 +14,50 @@ use crate::app::{AppSwitcher, Message};
 use crate::icons::icon_name_for;
 use crate::wayland::{Screen, ToplevelEntry};
 
-/// Cheap title clipping: iced's ellipsis needs a height limit we don't want here, and
-/// a fixed character budget keeps every row's height identical.
-fn truncate(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
+/// Hard cap on how many lines a title may occupy, so a pathological window title cannot
+/// make the cards taller than the screen.
+pub const MAX_TITLE_LINES: usize = 3;
+
+/// How many lines a title needs when wrapped to `cols` characters.
+///
+/// Titles wrap on break characters where possible and are hard-broken mid-word when a
+/// single word is longer than the card, so no title ever spills past the preview edges.
+pub fn count_lines(title: &str, cols: usize) -> usize {
+    let cols = cols.max(4);
+    if title.chars().count() <= cols {
+        return 1;
     }
-    let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-    out.push('…');
-    out
+    let mut lines = 1usize;
+    let mut used = 0usize;
+    for word in title.split_whitespace() {
+        let wlen = word.chars().count();
+        let sep = if used == 0 { 0 } else { 1 };
+        if used + sep + wlen <= cols {
+            used += sep + wlen;
+        } else if wlen <= cols {
+            lines += 1;
+            used = wlen;
+        } else {
+            // Break an over-long word across as many lines as it needs.
+            let mut rest = wlen;
+            if used > 0 {
+                lines += 1;
+            }
+            while rest > cols {
+                rest -= cols;
+                lines += 1;
+            }
+            used = rest;
+        }
+    }
+    lines
+}
+
+/// Estimated characters per line for a card `text_w` px wide at `px` font size.
+pub fn chars_per_line(text_w: f32, px: f32) -> usize {
+    // Arimo/Noto Sans average out at roughly 0.52 em per glyph for mixed-case Latin text,
+    // but CJK and Cyrillic-dense strings are wider, so budget per glyph conservatively.
+    ((text_w.max(30.0) / (px * 0.55)).floor() as usize).max(4)
 }
 
 fn color(c: [f32; 4]) -> Color {
@@ -35,25 +70,44 @@ pub struct Animation;
 impl Animation {
     /// How much bigger the selected preview gets, in percent (5%).
     pub const GROWTH: f32 = 0.05;
+    /// Extra scale the incoming card springs past its resting size, as a fraction of the
+    /// card size. Kept small so the effect reads as a bounce, not a zoom.
+    pub const BOUNCE: f32 = 0.022;
     /// Error below which the animation is considered finished (stops the 16 ms tick).
     const EPSILON: f32 = 0.002;
 
-    /// Critically-damped-ish approach towards `1.0`: fast at first, gliding to a stop.
-    pub fn step(current: f32, _target: f32, dt: f32) -> f32 {
-        // Exponential smoothing with a time constant of ~60 ms.
-        let k = 1.0 - (-dt / 0.06).exp();
-        (current + (1.0 - current) * k).clamp(0.0, 1.0)
+    /// Spring-ish approach towards `target`: fast at first, then a soft overshoot that
+    /// settles back. The overshoot is what makes a Tab press read as a "bounce" rather
+    /// than a plain grow.
+    pub fn step(current: f32, target: f32, dt: f32) -> f32 {
+        // Exponential smoothing with a time constant of ~55 ms, so two cards hand over
+        // in about the same time as a native switcher (~150 ms total).
+        let k = 1.0 - (-dt / 0.055).exp();
+        let next = current + (target - current) * k;
+        // Clamp only the resting end; the upper overshoot is produced by `scale`, not here.
+        next.clamp(0.0, 1.0)
     }
 
     pub fn settled(value: f32) -> bool {
-        !(value > 0.0) || 1.0 - value < Self::EPSILON
+        value < Self::EPSILON || 1.0 - value < Self::EPSILON
     }
 
-    /// Scale factor to apply to the selected card for a given progress value.
+    /// Scale factor to apply to a card for a given progress value.
+    ///
+    /// `progress` runs 0 -> 1 for the card gaining focus. The curve overshoots to ~1.5%
+    /// past the target and eases back, so the selected card visibly "bounces" into place
+    /// while the one losing focus glides down without a jump.
     pub fn scale(progress: f32) -> f32 {
-        // A soft ease-out so even a single Tab press reads as a deliberate "grow".
-        let t = 1.0 - (1.0 - progress.clamp(0.0, 1.0)).powi(2);
-        1.0 + Self::GROWTH * t
+        let t = progress.clamp(0.0, 1.0);
+        // Ease out quickly, then lift past the resting size before settling back on it.
+        // The overshoot term peaks around a third of the way in and is exactly zero at
+        // t = 1, so the card starts at 1.0x, springs to ~1.072x, and lands on 1.05x.
+        let eased = 1.0 - (1.0 - t).powi(2);
+        let overshoot = Self::BOUNCE
+            * (std::f32::consts::PI * t.powf(0.75)).sin()
+            * (1.0 - t)
+            * 3.0;
+        1.0 + Self::GROWTH * eased + overshoot
     }
 }
 
@@ -76,19 +130,24 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    pub fn fit(style: &Style, screen: Screen, n: usize) -> Self {
-        let cols = style.columns_for(n);
-        let rows = n.div_ceil(cols).max(1);
+    /// `titles` is the window titles in display order; their wrapped line count sets the
+    /// card height so every preview is exactly the same size, sized to the tallest title.
+    pub fn fit(style: &Style, screen: Screen, n: usize, titles: &[String]) -> Self {
+        let mut cols = style.columns_for(n);
 
         let card_pad = 6.0f32;
         let mut thumb_w = style.thumb_width.max(120) as f32;
         let mut thumb_h = style.thumb_height.max(68) as f32;
         let mut gap     = style.gap as f32;
         let mut pad     = style.padding as f32;
-        let mut title_h = if style.show_titles { 30.0 } else { 0.0 };
+        // One line of title plus its padding; multiplied by the tallest title's line
+        // count once the card width is known.
+        const TITLE_LINE: f32 = 22.0;
+        const TITLE_PAD: f32 = 8.0;
+        let mut title_h = if style.show_titles { TITLE_LINE + TITLE_PAD } else { 0.0 };
         let mut radius  = style.radius;
 
-        let panel = |tw: f32, th: f32, gap: f32, pad: f32, title_h: f32| {
+        let panel = |cols: usize, rows: usize, tw: f32, th: f32, gap: f32, pad: f32, title_h: f32| {
             let card_w = tw + 2.0 * card_pad;
             let card_h = th + 2.0 * card_pad + title_h;
             (
@@ -102,7 +161,23 @@ impl Metrics {
         let avail_w = (screen.width as f32 - 96.0).max(280.0);
         let avail_h = (screen.height as f32 - 96.0).max(220.0);
 
-        let (w, h) = panel(thumb_w, thumb_h, gap, pad, title_h);
+        // A single-line row does not shrink every preview just to fit all windows across
+        // the screen: it becomes a sliding window instead, showing only as many cards as
+        // fit at a legible size and scrolling the rest as focus advances.
+        if style.layout == Layout::Row && style.columns == 0 {
+            let min_card_w = style.thumb_width.max(120) as f32 * 0.6 + 2.0 * card_pad;
+            let fit_cols = ((avail_w + gap) / (min_card_w + gap)).floor() as usize;
+            cols = fit_cols.clamp(1, n.max(1));
+        }
+        // A sliding-window row is always exactly one line: the extra windows live off the
+        // edge of the screen rather than wrapping onto a second row.
+        let rows = if style.layout == Layout::Row && style.columns == 0 {
+            1
+        } else {
+            n.div_ceil(cols).max(1)
+        };
+
+        let (w, h) = panel(cols, rows, thumb_w, thumb_h, gap, pad, title_h);
         if w > avail_w || h > avail_h {
             // A single row of eight windows has to get pretty small to fit; allow it to
             // shrink further than the grid would, down to a legible minimum.
@@ -120,6 +195,22 @@ impl Metrics {
         let thumb_w = thumb_w.round() as u16;
         let thumb_h = thumb_h.round() as u16;
         let card_pad = card_pad.round() as u16;
+
+        // Widen the title area to the tallest wrapped title so that every card is the
+        // same height and no title is clipped to a single line.
+        if title_h > 0.0 {
+            let text_px = 13.0f32;
+            let text_w = (thumb_w as f32) - 16.0 * (13.0 / text_px) - 6.0;
+            let cpl = chars_per_line(text_w, text_px);
+            let lines = titles
+                .iter()
+                .map(|t| count_lines(t, cpl))
+                .max()
+                .unwrap_or(1)
+                .clamp(1, MAX_TITLE_LINES);
+            title_h = TITLE_PAD + lines as f32 * TITLE_LINE;
+        }
+
         let title_h = title_h.round() as u16;
 
         Self {
@@ -157,6 +248,39 @@ impl Metrics {
         ((self.card_w as f32).max(w), (self.card_h as f32).max(h))
     }
 
+    /// First visible entry index in a single-line row that scrolls.
+    ///
+    /// In `Layout::Row` with more windows than fit on screen, the row behaves like an
+    /// endless carousel: the selected card is kept inside a sliding window and cards that
+    /// scroll off the left are simply not drawn. Because selection wraps around with `%`,
+    /// the user can keep pressing Tab forever.
+    pub fn row_window_start(&self, selected: usize, total: usize) -> usize {
+        let visible = self.cols.min(total);
+        if visible >= total || visible == 0 {
+            return 0;
+        }
+        let half = visible / 2;
+        // Keep the selection centred once it passes the middle of the window, and pin the
+        // window at both ends of the list so the first and last cards are reachable.
+        let centred = selected.saturating_sub(half);
+        centred.min(total - visible)
+    }
+
+    /// Number of cards actually drawn for the given selection.
+    pub fn visible_count(&self, total: usize) -> usize {
+        if self.rows != 1 {
+            return total;
+        }
+        self.cols.min(total.max(1)).max(1)
+    }
+
+    /// Indices of the cards to draw, in display order.
+    pub fn visible_indices(&self, selected: usize, total: usize) -> Vec<usize> {
+        let start = if self.rows == 1 { self.row_window_start(selected, total) } else { 0 };
+        let count = self.visible_count(total);
+        (start..total).take(count).collect()
+    }
+
     /// Size of the layer surface in logical pixels.
     pub fn panel_size(&self) -> (u32, u32) {
         let (c, r) = (self.cols as u32, self.rows as u32);
@@ -192,17 +316,26 @@ fn grid(state: &AppSwitcher) -> Element<'_, Message> {
     let border_w = m.border;
     let bg       = color(tv.bg);
 
+    // In a single-line row that does not fit on screen, draw only the sliding window of
+    // cards around the selection so the row can cycle endlessly.
+    let visible: Vec<usize> = m.visible_indices(state.selected, state.entries.len());
     let mut rows: Vec<Element<'_, Message>> = Vec::new();
-    for (r, chunk) in state.entries.chunks(m.cols).enumerate() {
+    for chunk in visible.chunks(m.cols) {
         let mut cells: Vec<Element<'_, Message>> = Vec::with_capacity(m.cols);
-        for (c, entry) in chunk.iter().enumerate() {
-            let i = r * m.cols + c;
+        for &i in chunk.iter() {
+            let entry = &state.entries[i];
             cells.push(card(state, entry, i, accent, card_bg, sel_bg, text_col, radius, border_w));
         }
+        let chunk_len = chunk.len();
         // Keep short rows aligned with the grid instead of centering them, and fill the
         // leftover width with the selected cell's (larger) footprint.
-        let (slot_w, _) = m.card_size_for(state.hover);
-        for _ in chunk.len()..m.cols {
+        // Reserve room for the largest card so the row does not reflow as focus moves.
+        let slot_w = state
+            .hover
+            .iter()
+            .fold(0f32, |acc, p| acc.max(m.card_size_for(*p).0))
+            .max(m.card_w as f32);
+        for _ in chunk_len..m.cols {
             cells.push(Space::new().width(Length::Fixed(slot_w)).height(Length::Fixed(1.0)).into());
         }
         rows.push(row(cells).spacing(m.gap as f32).align_y(Alignment::Center).into());
@@ -253,7 +386,9 @@ fn card<'a>(
     let selected = index == state.selected;
     let icon_name = icon_name_for(&entry.app_id);
 
-    let progress = if selected { state.hover } else { 0.0 };
+    // Every card animates independently: the one gaining focus bounces up while the one
+    // losing focus glides back down.
+    let progress = state.hover.get(index).copied().unwrap_or(0.0);
     let scale    = Animation::scale(progress);
     let (card_w, card_h) = m.card_size_for(progress);
 
@@ -304,10 +439,12 @@ fn card<'a>(
         let text_px = (13.0 * scale).round().max(10.0) as u16;
         row![
             small_icon,
-            text(truncate(&entry.title, 42))
+            // Wrap instead of clipping: long titles spill onto extra lines and every
+            // card is tall enough for the tallest of them (see `Metrics::fit`).
+            text(&entry.title)
                 .size(text_px)
                 .width(Length::Fill)
-                .wrapping(Wrapping::None)
+                .wrapping(Wrapping::WordOrGlyph)
                 .class(cosmic::theme::Text::Color(text_col)),
         ]
         .spacing((6.0 * scale).round())
@@ -514,4 +651,138 @@ fn strip(state: &AppSwitcher) -> Element<'_, Message> {
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_titles_need_one_line() {
+        assert_eq!(count_lines("Firefox", 30), 1);
+    }
+
+    #[test]
+    fn long_titles_wrap_onto_more_lines() {
+        let title = "Очень длинное название документа — Cosmic Windows Swapper README";
+        assert!(count_lines(title, 24) >= 2, "expected wrapping, got {}", count_lines(title, 24));
+    }
+
+    #[test]
+    fn a_single_overlong_word_is_hard_broken() {
+        let word = "x".repeat(60);
+        assert!(count_lines(&word, 20) >= 3);
+    }
+
+    #[test]
+    fn bouncing_scale_peaks_above_final_growth() {
+        let peak = (0..=100)
+            .map(|i| Animation::scale(i as f32 / 100.0))
+            .fold(0.0f32, f32::max);
+        let final_scale = Animation::scale(1.0);
+        assert!(peak > final_scale, "curve must overshoot to read as a bounce");
+        // The overshoot stays subtle: it peaks a couple of percent past the resting size,
+        // so the card springs without appearing to zoom.
+        assert!(
+            peak < 1.0 + Animation::GROWTH + Animation::BOUNCE,
+            "peak {peak} should stay within growth plus bounce"
+        );
+        assert!(peak > 1.0 + Animation::GROWTH + Animation::BOUNCE * 0.5);
+    }
+
+    #[test]
+    fn scale_rests_at_exactly_one_and_growth_at_the_end() {
+        assert!((Animation::scale(0.0) - 1.0).abs() < 1e-6);
+        assert!((Animation::scale(1.0) - (1.0 + Animation::GROWTH)).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::*;
+
+    /// Replays the per-frame update loop from `app.rs` to prove the "smooth bouncing"
+    /// effect runs again on every focus move and that the outgoing card eases back down at
+    /// the same time as the incoming one springs up.
+    fn run(frames: impl FnMut(&mut Vec<f32>), hover: &mut Vec<f32>, selected: usize, dt: f32) {
+        let _ = frames;
+        hover.resize(selected.max(hover.len()).max(3), 0.0);
+        for (i, value) in hover.iter_mut().enumerate() {
+            let target = if i == selected { 1.0 } else { 0.0 };
+            *value = Animation::step(*value, target, dt);
+        }
+    }
+
+    #[test]
+    fn every_tab_press_replays_the_animation() {
+        let dt = 1.0 / 60.0;
+        let mut hover = vec![0.0f32; 3];
+
+        // Settle on card 1.
+        for _ in 0..120 {
+            run(|_| {}, &mut hover, 1, dt);
+        }
+        assert!((hover[1] - 1.0).abs() < 1e-3, "card 1 should be fully grown");
+        assert!(hover[0] < 1e-3 && hover[2] < 1e-3);
+
+        // Move to card 2: card 1 must start shrinking and card 2 growing right away.
+        run(|_| {}, &mut hover, 2, dt);
+        assert!(hover[1] < 1.0, "outgoing card must not snap back instantly");
+        assert!(hover[2] > 0.0, "incoming card must start growing");
+
+        // The incoming card overshoots its resting size mid-flight, which is what reads as
+        // a bounce rather than a plain ease.
+        let peak_scale = (0..40)
+            .map(|_| {
+                run(|_| {}, &mut hover, 2, dt);
+                Animation::scale(hover[2])
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            peak_scale > 1.0 + Animation::GROWTH,
+            "incoming card should spring past its resting size, peaked at {peak_scale}"
+        );
+
+        // And it settles again, ready for the next press to replay it.
+        for _ in 0..200 {
+            run(|_| {}, &mut hover, 2, dt);
+        }
+        assert!((hover[2] - 1.0).abs() < 1e-3);
+        assert!(hover[1] < 1e-3);
+        assert!(hover.iter().all(|v| Animation::settled(*v)));
+    }
+
+    #[test]
+    fn visible_window_hides_cards_that_scrolled_off() {
+        let style = Style { layout: Layout::Row, ..Style::default() };
+        let screen = Screen { width: 2560, height: 1440 };
+        let titles: Vec<String> = (0..14).map(|i| format!("window {i}")).collect();
+        let m = Metrics::fit(&style, screen, 14, &titles);
+
+        assert_eq!(m.rows, 1, "a sliding row stays on one line");
+        assert!(m.cols < 14, "the row must not try to fit every window at once");
+
+        let first = m.visible_indices(0, 14);
+        let later = m.visible_indices(9, 14);
+        assert_eq!(first.len(), m.cols);
+        assert!(!later.contains(&0), "cards that scrolled off are hidden");
+        assert!(later.iter().all(|i| *i < 14));
+        // The window is pinned to the end of the list so the last card is reachable.
+        assert_eq!(*later.last().unwrap(), 13);
+    }
+
+    #[test]
+    fn cards_share_one_height_based_on_the_tallest_title() {
+        let style = Style { layout: Layout::Grid, ..Style::default() };
+        let screen = Screen { width: 2560, height: 1440 };
+        let short: Vec<String> = vec!["Steam".into(), "Files".into()];
+        let tall: Vec<String> = vec![
+            "Steam".into(),
+            "Пересборка Switch Scope как в KDE — DeepSeek Harness, группа группа 1".into(),
+        ];
+        let a = Metrics::fit(&style, screen, 2, &short);
+        let b = Metrics::fit(&style, screen, 2, &tall);
+        assert!(b.title_h > a.title_h, "a long title must reserve more lines");
+        assert!(b.card_h == b.thumb_h + 2 * b.card_pad + b.title_h);
+    }
 }

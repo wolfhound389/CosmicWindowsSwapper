@@ -105,11 +105,16 @@ make uninstall
 Three layouts ship, all fully themable:
 
 - **Grid** (default) — the Windows/KDE-style block of live window thumbnails with titles, arranged roughly square on screen.
-- **Single line** — the same previews on one horizontal line, shrinking automatically to fit the screen width.
+- **Single line** — the same previews on one horizontal line. When there are more windows than fit across the screen it becomes a sliding window: holding the switcher key and pressing Tab scrolls the row, hiding the cards that move off the left edge and revealing the next ones, and the cycle wraps around endlessly until you pick a window or let go of the hotkey.
 - **Icons** — the original macOS-style horizontal strip of app icons.
 
-The overlay is always centred on the screen, and the selected window grows 5% larger
-than its neighbours with a smooth animation for as long as the switcher key is held.
+The overlay is always centred on the screen. Every time focus moves to another window
+the new card springs past its resting size and settles back — a smooth bounce — while the
+card losing focus glides back down, so the hand-off between two cards is continuous. The
+selected card finally rests 5% larger than its neighbours.
+
+Long window titles wrap onto up to three lines instead of being clipped, and every card is
+sized to the tallest title in the current set so all previews stay exactly the same size.
 Every preview card carries a Material-style close button (a cross in a circle) in its
 top-right corner for closing a window directly from the switcher.
 
@@ -123,8 +128,8 @@ style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0
 ```
 
 Set `columns` to a number between 1 and 5 to pin the grid width; `0` picks it from the
-window count (and `layout: Row` forces a single line). Set `show_close: false` to hide the
-close buttons.
+window count (and `layout: Row` keeps everything on a single line, scrolling when the
+windows no longer fit). Set `show_close: false` to hide the close buttons.
 
 ---
 
