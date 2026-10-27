@@ -1046,11 +1046,14 @@ dependencies = [
  "cosmic-protocols",
  "env_logger",
  "freedesktop-desktop-entry",
+ "libc",
  "libcosmic",
  "log",
+ "memmap2 0.9.11",
  "switcher-config",
  "tokio",
  "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

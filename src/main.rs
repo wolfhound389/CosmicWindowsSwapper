@@ -1,14 +1,16 @@
 mod app;
 mod icons;
+mod shot;
+mod thumbs;
 mod ui;
 mod wayland;
 
 use anyhow::Result;
 use clap::Parser;
+use cosmic::cosmic_config::{Config, ConfigGet};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use cosmic::cosmic_config::ConfigGet;
-use switcher_config::{Theme, WorkspaceScope, APP_ID, CONFIG_VERSION};
+use switcher_config::{Style, Theme, WorkspaceScope, APP_ID, CONFIG_VERSION};
 
 pub fn socket_path() -> std::path::PathBuf {
     let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
@@ -18,29 +20,38 @@ pub fn socket_path() -> std::path::PathBuf {
 #[derive(Parser, Debug)]
 #[command(name = "cosmic-ext-app-switcher", version)]
 pub struct Args {
+    /// Move the selection backwards (Shift+Tab).
     #[arg(long, default_value_t = false)]
     pub reverse: bool,
+
+    /// Development aid: capture the whole screen to a PPM file and exit.
+    #[arg(long, value_name = "PATH")]
+    pub screenshot: Option<std::path::PathBuf>,
 }
 
-fn load_theme() -> Theme {
-    use cosmic::cosmic_config::Config;
-    Config::new(APP_ID, CONFIG_VERSION)
-        .ok()
-        .and_then(|c| c.get::<Theme>("theme").ok())
-        .unwrap_or_default()
+fn load_config() -> (Theme, WorkspaceScope, Style) {
+    let Ok(config) = Config::new(APP_ID, CONFIG_VERSION) else {
+        return (Theme::default(), WorkspaceScope::default(), Style::default());
+    };
+    let theme = config.get::<Theme>("theme").unwrap_or_default();
+    let scope = config.get::<WorkspaceScope>("workspace_scope").unwrap_or_default();
+    let style = config.get::<Style>("style").unwrap_or_default();
+    (theme, scope, style)
 }
 
-fn load_scope() -> WorkspaceScope {
-    use cosmic::cosmic_config::Config;
-    Config::new(APP_ID, CONFIG_VERSION)
-        .ok()
-        .and_then(|c| c.get::<WorkspaceScope>("workspace_scope").ok())
-        .unwrap_or_default()
+/// Preferred preview resolution: twice the on-screen size keeps text crisp on HiDPI and
+/// still downscales cleanly on 1x displays.
+fn preview_resolution(style: &Style) -> u32 {
+    (style.thumb_width as u32).saturating_mul(2).max(320)
 }
 
 fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
+
+    if let Some(path) = &args.screenshot {
+        return shot::capture_screen(path);
+    }
 
     // If a switcher is already running, signal it to cycle and exit.
     let cmd = if args.reverse { b"prev" as &[u8] } else { b"next" as &[u8] };
@@ -52,12 +63,13 @@ fn main() -> Result<()> {
     // We are the first instance. Clean up any stale socket from a crash.
     let _ = std::fs::remove_file(socket_path());
 
-    let theme = load_theme();
-    let scope = load_scope();
-    let (toplevels, cmd_tx) = wayland::spawn_wayland_thread(scope)?;
-    if toplevels.is_empty() {
+    let (theme, scope, style) = load_config();
+
+    let switcher = wayland::spawn(scope, preview_resolution(&style), style.radius * 2.0)?;
+
+    if switcher.entries.is_empty() {
         return Ok(());
     }
 
-    app::run(toplevels, args.reverse, cmd_tx, theme)
+    app::run(switcher, args.reverse, theme, style)
 }

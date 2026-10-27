@@ -27,7 +27,10 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "417923f", defa
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols", default-features = false, features = [
     "client",
 ], rev = "c253ec1" }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 freedesktop-desktop-entry = "0.5"
+memmap2 = "0.9"
+libc = "0.2"
 switcher-config = { path = "config" }
 
 wayland-client = "0.31"
