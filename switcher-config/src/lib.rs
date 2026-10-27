@@ -43,9 +43,11 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
 /// How the overlay arranges the windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Layout {
-    /// Windows/KDE-style grid of live window previews with titles.
+    /// Live window previews wrapped into a grid of several rows.
     #[default]
     Grid,
+    /// Live window previews on a single horizontal line.
+    Row,
     /// The original macOS-style horizontal strip of app icons.
     Strip,
 }
@@ -53,13 +55,29 @@ pub enum Layout {
 impl Layout {
     pub fn label(&self) -> &'static str {
         match self {
-            Layout::Grid  => "Previews",
+            Layout::Grid  => "Grid",
+            Layout::Row   => "Row",
             Layout::Strip => "Icons",
         }
     }
 
-    pub fn all() -> [Layout; 2] {
-        [Layout::Grid, Layout::Strip]
+    /// One-line description used as a tooltip in the settings applet.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Layout::Grid  => "Window previews in a grid",
+            Layout::Row   => "Window previews in a single line",
+            Layout::Strip => "App icons only",
+        }
+    }
+
+    /// Does this layout draw live window previews (and therefore supports the
+    /// per-window close button and preview sizing)?
+    pub fn has_previews(&self) -> bool {
+        matches!(self, Layout::Grid | Layout::Row)
+    }
+
+    pub fn all() -> [Layout; 3] {
+        [Layout::Grid, Layout::Row, Layout::Strip]
     }
 }
 
@@ -86,6 +104,8 @@ pub struct Style {
     pub radius:       f32,
     /// Thickness of the selection ring.
     pub border:       f32,
+    /// Draw a small "close window" button on every preview (Grid and Row layouts).
+    pub show_close:   bool,
 }
 
 impl Default for Style {
@@ -101,6 +121,7 @@ impl Default for Style {
             show_icons:   true,
             radius:       10.0,
             border:       2.5,
+            show_close:   true,
         }
     }
 }
@@ -122,8 +143,16 @@ impl Style {
         if n == 0 {
             return 1;
         }
+        if !self.layout.has_previews() {
+            return n;
+        }
         if self.columns > 0 {
             return (self.columns as usize).min(n);
+        }
+        if self.layout == Layout::Row {
+            // Everything on one line; `Metrics::fit` shrinks the previews when they
+            // no longer fit across the screen.
+            return n;
         }
         // Roughly square grid: a 16:9 screen shows a 16:9 block of 16:9 previews.
         let cols = ((n as f64).sqrt().ceil() as usize).clamp(1, 5);
@@ -307,6 +336,17 @@ mod tests {
         let new = root.join("cosmic").join(APP_ID).join("v1");
         assert_eq!(migrate_legacy_config(&new), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn row_layout_puts_every_window_on_one_line() {
+        let style = Style { layout: Layout::Row, ..Style::default() };
+        assert_eq!(style.columns_for(7), 7);
+        // An explicit column count still wins.
+        let style = Style { layout: Layout::Row, columns: 3, ..Style::default() };
+        assert_eq!(style.columns_for(7), 3);
+        assert!(Layout::Row.has_previews());
+        assert!(!Layout::Strip.has_previews());
     }
 
     #[test]

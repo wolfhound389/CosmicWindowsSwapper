@@ -78,6 +78,8 @@ pub enum ThumbEvent {
 
 pub enum Command {
     Activate(usize),
+    /// Ask the compositor to close the window at this index, then quit the switcher.
+    Close(usize),
     Cancel,
 }
 
@@ -541,17 +543,30 @@ fn thread_main(
 }
 
 fn run_command(conn: &Connection, data: &AppData, cmd: Command) -> Result<()> {
-    if let Command::Activate(key) = cmd {
-        if let (Some(toplevel), Some(manager), Some(seat)) = (
-            data.toplevels.get(key),
-            data.manager.as_ref(),
-            data.seat.as_ref(),
-        ) {
-            if let Some(cosmic) = &toplevel.cosmic {
-                manager.activate(cosmic, seat);
-                conn.flush().ok();
+    match cmd {
+        Command::Activate(key) => {
+            if let (Some(toplevel), Some(manager), Some(seat)) = (
+                data.toplevels.get(key),
+                data.manager.as_ref(),
+                data.seat.as_ref(),
+            ) {
+                if let Some(cosmic) = &toplevel.cosmic {
+                    manager.activate(cosmic, seat);
+                    conn.flush().ok();
+                }
             }
         }
+        Command::Close(key) => {
+            if let (Some(toplevel), Some(manager)) =
+                (data.toplevels.get(key), data.manager.as_ref())
+            {
+                if let Some(cosmic) = &toplevel.cosmic {
+                    manager.close(cosmic);
+                    conn.flush().ok();
+                }
+            }
+        }
+        Command::Cancel => {}
     }
     Ok(())
 }

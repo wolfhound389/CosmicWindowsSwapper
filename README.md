@@ -98,25 +98,33 @@ make uninstall
 | Modifier release | Activate selected window |
 | Escape | Cancel — return to original window |
 | Click a preview | Select and activate it |
+| Click the ✕ button | Close that window without switching to it |
 
 ### Layouts
 
-Two layouts ship, both fully themable:
+Three layouts ship, all fully themable:
 
-- **Previews** (default) — the Windows/KDE-style grid of live window thumbnails with titles, arranged roughly square on screen.
+- **Grid** (default) — the Windows/KDE-style block of live window thumbnails with titles, arranged roughly square on screen.
+- **Single line** — the same previews on one horizontal line, shrinking automatically to fit the screen width.
 - **Icons** — the original macOS-style horizontal strip of app icons.
 
-Switch between them from the panel applet. **Preview size** (S / M / L) and a
-**Show window titles** toggle sit next to it; every other knob — gap, padding, corner
+The overlay is always centred on the screen, and the selected window grows 5% larger
+than its neighbours with a smooth animation for as long as the switcher key is held.
+Every preview card carries a Material-style close button (a cross in a circle) in its
+top-right corner for closing a window directly from the switcher.
+
+Switch between them from the panel applet. **Preview size** (S / M / L), a
+**Show window titles** toggle and a **Show close buttons** toggle sit next to it; every other knob — gap, padding, corner
 radius, selection ring, column count, icon visibility — lives in the `style` section of
 the config file:
 
 ```ron
-style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0,show_titles:true,show_icons:true,radius:10.0,border:2.5),
+style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0,show_titles:true,show_icons:true,radius:10.0,border:2.5,show_close:true),
 ```
 
 Set `columns` to a number between 1 and 5 to pin the grid width; `0` picks it from the
-window count.
+window count (and `layout: Row` forces a single line). Set `show_close: false` to hide the
+close buttons.
 
 ---
 
@@ -127,7 +135,7 @@ window count.
 Add the **Windows Swapper Settings** applet to your COSMIC panel for quick access to:
 - **Super+Tab shortcut** toggle — enable or disable without touching the terminal
 - **Theme picker** — Dark, Light, Frosted, or Midnight
-- **Layout** — preview grid or icon strip, preview size, and window titles
+- **Layout** — preview grid, single line, or icon strip, preview size, titles, close buttons
 
 ## Enable / Disable
 

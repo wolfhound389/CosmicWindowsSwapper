@@ -20,7 +20,7 @@ use cosmic::{
 };
 use switcher_config::{Layout, Style, Theme, ThemeValues};
 
-use crate::ui::Metrics;
+use crate::ui::{Animation, Metrics};
 use crate::wayland::{Command, Switcher, ThumbEvent, ToplevelEntry};
 
 pub struct AppSwitcher {
@@ -40,6 +40,16 @@ pub struct AppSwitcher {
     surface_id:   WindowId,
     test_deadline: Option<Instant>,
     finished:     bool,
+    /// Animated scale of the selected card: it grows by `SELECTED_GROWTH` so the
+    /// highlight is visible while the modifier key is still held. Values above 1.0 are
+    /// interpreted by `ui` as "how far the selection animation has travelled".
+    pub hover:    f32,
+    /// Timestamp of the previous animation tick (for frame-rate independent easing).
+    pub last_tick: Instant,
+    /// Keys replayed so far from `COSMIC_SWITCHER_TEST_KEYS`.
+    injected:     Vec<String>,
+    /// Index whose close button the pointer is over (only for highlights).
+    pub hovered:  Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,9 +59,32 @@ pub enum Message {
     SelectIndex(usize),
     MoveRow(isize),
     Activate,
+    /// Close the window at this index without switching to it.
+    CloseIndex(usize),
+    HoverCard(usize, bool),
+    AnimTick,
+    /// Replay the next entry of `COSMIC_SWITCHER_TEST_KEYS` (test hook).
+    InjectKey,
     Cancel,
     KeyEvent(keyboard::Event),
     Tick,
+}
+
+/// Test hook: `COSMIC_SWITCHER_TEST_KEYS="Tab,Tab,Right,Enter"` replays key presses after
+/// a short delay so an automated run exercises the same selection path a human would
+/// (including the grow animation), without needing to inject input into the compositor.
+fn test_keys() -> Vec<String> {
+    std::env::var("COSMIC_SWITCHER_TEST_KEYS")
+        .map(|v| v.split(',').map(|k| k.trim().to_string()).collect())
+        .unwrap_or_default()
+}
+
+/// Delay before the first replayed key, in milliseconds.
+fn test_key_delay() -> u64 {
+    std::env::var("COSMIC_SWITCHER_TEST_KEY_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400)
 }
 
 /// Test hook: `COSMIC_SWITCHER_TEST_MS=1500` opens the overlay without grabbing the
@@ -82,12 +115,13 @@ impl Application for AppSwitcher {
 
         let metrics = Metrics::fit(&style, screen, n);
 
-        // The surface is exactly the size of the panel, so the compositor centres it on
-        // the active output for us.
+        // The surface is sized to the panel (plus room for the selection growing), and
+        // the content inside it is centred on both axes, which is what puts the panel in
+        // the middle of the screen.
         let (surface_w, surface_h) = match style.layout {
-            Layout::Grid => {
+            Layout::Grid | Layout::Row => {
                 let (w, h) = metrics.panel_size();
-                (w + 8, h + 8)
+                (w + Metrics::GROWTH_PX, h + Metrics::GROWTH_PX)
             }
             Layout::Strip => {
                 let icon = theme_preset.values().icon_size as u32;
@@ -104,14 +138,25 @@ impl Application for AppSwitcher {
         };
 
         let surface_id = WindowId::unique();
+        // Anchor every edge and let the surface span the whole output. A layer surface
+        // that is smaller than the output and not anchored on the opposite edge is
+        // pinned to the top-left corner by the compositor, which is what used to leave
+        // the panel hugging the corner. Spanning the output makes the position
+        // unambiguous, and the content centres itself inside the surface instead.
+        let _ = (surface_w, surface_h);
+        let (full_w, full_h) = (screen.width as u32, screen.height as u32);
         let layer_task = get_layer_surface::<cosmic::Action<Message>>(SctkLayerSurfaceSettings {
             id: surface_id,
             layer: Layer::Overlay,
             keyboard_interactivity: interactivity,
-            // Anchor to the top-left corner: with an empty anchor the compositor places
-            // the (non-stretched) surface at (0,0), which pushed the panel off-centre.
-            anchor: Anchor::TOP | Anchor::LEFT,
-            size: Some((Some(surface_w), Some(surface_h))),
+            anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+            size: Some((Some(full_w), Some(full_h))),
+            // The default limits (1920x1080) would clamp a wide grid on a big output.
+            size_limits: iced::Limits::NONE
+                .min_width(1.0)
+                .min_height(1.0)
+                .max_width(full_w as f32)
+                .max_height(full_h as f32),
             ..Default::default()
         });
 
@@ -131,6 +176,10 @@ impl Application for AppSwitcher {
             surface_id,
             test_deadline: test.map(|d| Instant::now() + d),
             finished: false,
+            hover: 0.0,
+            last_tick: Instant::now(),
+            injected: Vec::new(),
+            hovered: None,
         };
 
         (app, layer_task)
@@ -142,13 +191,73 @@ impl Application for AppSwitcher {
             return Task::none();
         }
         match msg {
-            Message::SelectNext => self.selected = (self.selected + 1) % n,
-            Message::SelectPrev => self.selected = (self.selected + n - 1) % n,
-            Message::SelectIndex(i) => self.selected = i.min(n - 1),
+            Message::SelectNext => {
+                self.selected = (self.selected + 1) % n;
+                self.hover = 0.0;
+            }
+            Message::SelectPrev => {
+                self.selected = (self.selected + n - 1) % n;
+                self.hover = 0.0;
+            }
+            Message::SelectIndex(i) => {
+                if i.min(n - 1) != self.selected {
+                    self.hover = 0.0;
+                }
+                self.selected = i.min(n - 1);
+            }
             Message::MoveRow(delta) => {
                 let cols = self.metrics.cols.max(1) as isize;
                 let target = self.selected as isize + delta * cols;
-                self.selected = target.clamp(0, n as isize - 1) as usize;
+                let next = target.clamp(0, n as isize - 1) as usize;
+                if next != self.selected {
+                    self.hover = 0.0;
+                }
+                self.selected = next;
+            }
+            Message::InjectKey => {
+                let keys = test_keys();
+                let mut queue = self.injected.clone();
+                if queue.len() < keys.len() {
+                    let next = keys[queue.len()].clone();
+                    queue.push(next.clone());
+                    self.injected = queue;
+                    return self.update(match next.as_str() {
+                        "Tab"        => Message::SelectNext,
+                        "ShiftTab"   => Message::SelectPrev,
+                        "Tab2"       => Message::SelectNext,
+                        "Right"      => Message::SelectNext,
+                        "Left"       => Message::SelectPrev,
+                        "Down"       => Message::MoveRow(1),
+                        "Up"         => Message::MoveRow(-1),
+                        "Settle"     => Message::AnimTick,
+                        "Activate"   => Message::Activate,
+                        "Cancel"     => Message::Cancel,
+                        _            => Message::AnimTick,
+                    });
+                }
+                return Task::none();
+            }
+            Message::HoverCard(i, on) => {
+                self.hovered = if on { Some(i) } else { self.hovered.filter(|h| *h != i) };
+            }
+            Message::AnimTick => {
+                let dt = (Instant::now() - self.last_tick).as_secs_f32().clamp(0.0, 0.1);
+                self.last_tick = Instant::now();
+                self.hover = Animation::step(self.hover, 1.0, dt);
+            }
+            Message::CloseIndex(i) => {
+                if self.finished || i >= n {
+                    return Task::none();
+                }
+                // Windows-style: closing from the switcher dismisses the overlay. The
+                // wayland thread lingers a beat so the panel is gone before the
+                // compositor animates the window away.
+                self.finished = true;
+                self.cmd_tx.send(Command::Close(self.entries[i].key)).ok();
+                return Task::batch([
+                    destroy_layer_surface(self.surface_id),
+                    iced::exit(),
+                ]);
             }
             Message::Tick => {
                 loop {
@@ -289,7 +398,22 @@ impl Application for AppSwitcher {
             cosmic::iced::time::every(Duration::from_millis(25)).map(|_| Message::Tick)
         };
 
-        Subscription::batch([key_sub, socket_sub, tick_sub])
+        // Drive the selection "pop" animation until it settles.
+        let anim_sub = if Animation::settled(self.hover) {
+            Subscription::none()
+        } else {
+            cosmic::iced::time::every(Duration::from_millis(16)).map(|_| Message::AnimTick)
+        };
+
+        let keys = test_keys();
+        let inject_sub = if keys.is_empty() || self.finished {
+            Subscription::none()
+        } else {
+            cosmic::iced::time::every(Duration::from_millis(test_key_delay()))
+                .map(|_| Message::InjectKey)
+        };
+
+        Subscription::batch([key_sub, socket_sub, tick_sub, anim_sub, inject_sub])
     }
 
     fn view(&self) -> Element<'_, Message> {

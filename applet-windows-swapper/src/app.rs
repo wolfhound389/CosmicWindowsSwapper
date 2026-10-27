@@ -5,7 +5,7 @@ use cosmic::{
         window::Id as WindowId,
         widget::container::Style as ContainerStyle,
     },
-    widget::{column, container, mouse_area, row, text},
+    widget::{column, container, mouse_area, row, text, Space},
     Element,
 };
 use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
@@ -38,6 +38,7 @@ pub enum Message {
     SetLayout(Layout),
     SetPreviewSize(u16, u16),
     ToggleTitles(bool),
+    ToggleClose(bool),
     ToggleShortcut(bool),
 }
 
@@ -360,6 +361,10 @@ impl Application for AppletApp {
                 self.current_style.thumb_height = h;
                 self.save_style();
             }
+            Message::ToggleClose(enable) => {
+                self.current_style.show_close = enable;
+                self.save_style();
+            }
             Message::ToggleTitles(enable) => {
                 self.current_style.show_titles = enable;
                 if !enable {
@@ -534,16 +539,29 @@ impl Application for AppletApp {
             })
             .collect();
 
-        // Preview size only affects the grid; the icon strip is sized by the icons.
+        // Preview size, titles and close buttons only affect the preview layouts; the
+        // icon strip is sized by the icons alone.
+        let previews = self.current_style.layout.has_previews();
         let mut size_section: Vec<Element<Message>> =
             vec![text("Preview size").size(14).into()];
-        if self.current_style.layout == Layout::Grid {
+        if previews {
             size_section.push(row(size_options).spacing(8).into());
         } else {
-            size_section.push(
-                text("Only used by the preview grid").size(10).into(),
-            );
+            size_section.push(text("Only used by the preview layouts").size(10).into());
         }
+
+        let close_row: Element<Message> = if previews {
+            row![
+                cosmic::widget::checkbox(self.current_style.show_close)
+                    .on_toggle(Message::ToggleClose),
+                text("Show close buttons").size(12),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into()
+        } else {
+            Space::new().height(Length::Fixed(0.0)).into()
+        };
 
         let mut content = column![
             shortcut_section,
@@ -561,6 +579,7 @@ impl Application for AppletApp {
             ]
             .spacing(8)
             .align_y(Alignment::Center),
+            close_row,
             cosmic::widget::divider::horizontal::default(),
             text("Switch scope").size(14),
             row(scope_options).spacing(8),

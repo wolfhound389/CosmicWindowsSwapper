@@ -1,3 +1,6 @@
 /target
 /.flatpak-builder/
 /build-dir/
+/.shots/
+/.testcfg/
+/.testrt/

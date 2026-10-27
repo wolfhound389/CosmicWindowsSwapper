@@ -29,7 +29,7 @@ install: build
 	@$(MAKE) enable
 	@echo ""
 	@echo "Installed and enabled. Press Super+Tab or Alt+Tab to try it."
-	@echo "Add the 'App Switcher Settings' applet to your COSMIC panel to change themes."
+	@echo "Add the 'Windows Swapper Settings' applet to your COSMIC panel to change themes."
 
 uninstall:
 	@$(MAKE) disable
