@@ -56,8 +56,6 @@ const CAPTURE_DEADLINE: Duration = Duration::from_millis(600);
 pub struct ToplevelEntry {
     pub app_id:    String,
     pub title:     String,
-    pub is_active: bool,
-    pub minimized: bool,
     /// Index into the thread's internal toplevel list, used to activate the window.
     pub key:       usize,
 }
@@ -192,7 +190,7 @@ impl ShmBuffer {
 }
 
 fn memfd(size: usize) -> Result<OwnedFd> {
-    let name = std::ffi::CString::new("cosmic-app-switcher-preview").unwrap();
+    let name = std::ffi::CString::new("cosmic-windows-swapper-preview").unwrap();
     let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
     if fd < 0 {
         return Err(std::io::Error::last_os_error()).context("memfd_create failed");
@@ -506,8 +504,6 @@ fn thread_main(
         .map(|&i| ToplevelEntry {
             app_id:    data.toplevels[i].app_id.clone(),
             title:     data.toplevels[i].title.clone(),
-            is_active: data.toplevels[i].activated,
-            minimized: data.toplevels[i].minimized,
             key:       i,
         })
         .collect();

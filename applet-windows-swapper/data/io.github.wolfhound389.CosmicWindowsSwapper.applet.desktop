@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Windows Swapper Settings
+Comment=Set the visual theme for cosmic-windows-swapper
+Type=Application
+Exec=cosmic-applet-windows-swapper
+Icon=io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic
+Terminal=false
+NoDisplay=true
+X-CosmicApplet=true
+Categories=COSMIC;
+Keywords=COSMIC;Applet;AppSwitcher;Theme;

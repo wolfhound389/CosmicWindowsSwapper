@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# cosmic-ext-app-switcher — standalone uninstaller
-# Usage: curl -fsSL https://raw.githubusercontent.com/j0rdiun/cosmic-ext-app-switcher/main/uninstall.sh | bash
+# cosmic-windows-swapper — standalone uninstaller
+# Usage: curl -fsSL https://raw.githubusercontent.com/wolfhound389/CosmicWindowsSwapper/main/uninstall.sh | bash
 
 INSTALL_DIR="$HOME/.local/bin"
 APPS_DIR="$HOME/.local/share/applications"
-BINARY="cosmic-ext-app-switcher"
-APPLET="cosmic-ext-applet-app-switcher"
-OLD_BINARY="cosmic-app-switcher"
+BINARY="cosmic-windows-swapper"
+APPLET="cosmic-applet-windows-swapper"
+OLD_BINARY="cosmic-windows-swapper"
 SHORTCUTS_DIR="$HOME/.config/cosmic/com.system76.CosmicSettings.Shortcuts"
 
-echo "Uninstalling cosmic-ext-app-switcher..."
+echo "Uninstalling cosmic-windows-swapper..."
 
 # ── Remove shortcut registration ──────────────────────────────────────────────
 # Matches on the RON *keys*, not on the binary path: a substring match would also delete
@@ -69,14 +69,14 @@ if [ "$REMOVED" -eq 0 ]; then
 fi
 
 # ── Remove applet desktop file ────────────────────────────────────────────────
-DESKTOP="$APPS_DIR/io.github.cosmic-ext-applet-app-switcher.desktop"
+DESKTOP="$APPS_DIR/io.github.wolfhound389.CosmicWindowsSwapper.applet.desktop"
 if [ -f "$DESKTOP" ]; then
     rm -f "$DESKTOP"
     echo "Desktop file removed: $DESKTOP"
 fi
 
 # ── Remove applet icon ────────────────────────────────────────────────────────
-ICON="$HOME/.local/share/icons/hicolor/scalable/apps/io.github.cosmic-ext-applet-app-switcher-symbolic.svg"
+ICON="$HOME/.local/share/icons/hicolor/scalable/apps/io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic.svg"
 if [ -f "$ICON" ]; then
     rm -f "$ICON"
     echo "Icon removed: $ICON"

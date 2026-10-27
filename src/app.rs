@@ -68,7 +68,7 @@ impl Application for AppSwitcher {
     type Flags    = (Switcher, bool, Theme, Style);
     type Message  = Message;
 
-    const APP_ID: &'static str = "io.github.cosmic-ext-app-switcher";
+    const APP_ID: &'static str = "io.github.wolfhound389.CosmicWindowsSwapper";
 
     fn core(&self) -> &Core { &self.core }
     fn core_mut(&mut self) -> &mut Core { &mut self.core }
@@ -81,6 +81,9 @@ impl Application for AppSwitcher {
         let selected = if reverse { n.saturating_sub(1) } else { 1.min(n.saturating_sub(1)) };
 
         let metrics = Metrics::fit(&style, screen, n);
+
+        // The surface is exactly the size of the panel, so the compositor centres it on
+        // the active output for us.
         let (surface_w, surface_h) = match style.layout {
             Layout::Grid => {
                 let (w, h) = metrics.panel_size();
@@ -105,7 +108,9 @@ impl Application for AppSwitcher {
             id: surface_id,
             layer: Layer::Overlay,
             keyboard_interactivity: interactivity,
-            anchor: Anchor::empty(),
+            // Anchor to the top-left corner: with an empty anchor the compositor places
+            // the (non-stretched) surface at (0,0), which pushed the panel off-centre.
+            anchor: Anchor::TOP | Anchor::LEFT,
             size: Some((Some(surface_w), Some(surface_h))),
             ..Default::default()
         });

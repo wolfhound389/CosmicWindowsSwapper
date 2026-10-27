@@ -1,4 +1,4 @@
-# cosmic-ext-app-switcher
+# cosmic-windows-swapper
 
 macOS-style horizontal Super+Tab app switcher for COSMIC desktop on Pop!_OS.
 
@@ -24,7 +24,7 @@ make install                 # builds + installs to ~/.local/bin/ + enables shor
 
 **Two-process design**: cosmic-comp launches a fresh binary on every Super+Tab keypress.
 
-- First invocation: binds Unix socket at `/tmp/cosmic-ext-app-switcher.sock`, shows layer-shell overlay
+- First invocation: binds Unix socket at `/tmp/cosmic-windows-swapper.sock`, shows layer-shell overlay
 - Subsequent Tab presses (Super still held): new binary connects to socket, sends `"next"`/`"prev"`, exits
 - Running instance receives message via iced Subscription, updates selection, re-renders
 - Super release → `ModifiersChanged(logo=false)` → activate selected window
@@ -83,18 +83,18 @@ with `version.workspace = true`. Three things must agree or the release workflow
 
 1. Bump `[workspace.package] version`.
 2. Add a matching `<release version="…" date="…">` at the top of
-   `applet/data/io.github.cosmic-ext-applet-app-switcher.metainfo.xml`. **This entry is what
+   `applet/data/io.github.wolfhound389.CosmicWindowsSwapper.applet.metainfo.xml`. **This entry is what
    the COSMIC Store displays** — a stale one is why the store advertised 0.1.3 long after
    v0.1.4 shipped.
 3. Tag `vX.Y.Z` and push. `.github/workflows/release.yml` checks tag/Cargo/metainfo before
    building and refuses to publish a mismatch.
 4. The store does **not** follow tags or `main`. It rebuilds only when a PR to
    `pop-os/cosmic-flatpak` changes the pinned `"commit"` in
-   `app/io.github.cosmic-ext-applet-app-switcher/io.github.cosmic-ext-applet-app-switcher.json`.
+   `app/io.github.wolfhound389.CosmicWindowsSwapper.applet/io.github.wolfhound389.CosmicWindowsSwapper.applet.json`.
    Open that PR, regenerating the sibling `cargo-sources.json`
    (`flatpak/generate-cargo-sources.sh`) whenever `Cargo.lock` moved.
 
-The in-repo `io.github.cosmic-ext-applet-app-switcher.json` is a local-build variant, and
+The in-repo `io.github.wolfhound389.CosmicWindowsSwapper.applet.json` is a local-build variant, and
 differs from the upstream one in exactly two ways — diff them before opening a PR:
 
 - `sources` uses a local `dir` instead of a pinned `git` commit, so `flatpak-builder`

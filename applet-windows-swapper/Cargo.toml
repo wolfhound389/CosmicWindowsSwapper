@@ -1,10 +1,10 @@
 [package]
-name = "cosmic-ext-applet-app-switcher"
+name = "cosmic-applet-windows-swapper"
 version.workspace = true
 edition = "2024"
 
 [[bin]]
-name = "cosmic-ext-applet-app-switcher"
+name = "cosmic-applet-windows-swapper"
 path = "src/main.rs"
 
 [dependencies]
@@ -12,4 +12,5 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "417923f", defa
     "applet",
     "tokio",
 ] }
-switcher-config = { path = "../config" }
+switcher-config = { path = "../switcher-config" }
+ron = "0.12"

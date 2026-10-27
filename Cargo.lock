@@ -969,6 +969,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosmic-applet-windows-swapper"
+version = "0.1.6"
+dependencies = [
+ "libcosmic",
+ "ron",
+ "switcher-config",
+]
+
+[[package]]
 name = "cosmic-client-toolkit"
 version = "0.2.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=c253ec1#c253ec1d6804afbcdf250f5cc37ae1194bba7bd2"
@@ -1035,33 +1044,6 @@ source = "git+https://github.com/pop-os/libcosmic#18a7a75e3316b1f4855777af677d98
 dependencies = [
  "quote",
  "syn",
-]
-
-[[package]]
-name = "cosmic-ext-app-switcher"
-version = "0.1.5"
-dependencies = [
- "anyhow",
- "clap",
- "cosmic-protocols",
- "env_logger",
- "freedesktop-desktop-entry",
- "libc",
- "libcosmic",
- "log",
- "memmap2 0.9.11",
- "switcher-config",
- "tokio",
- "wayland-client",
- "wayland-protocols",
-]
-
-[[package]]
-name = "cosmic-ext-applet-app-switcher"
-version = "0.1.5"
-dependencies = [
- "libcosmic",
- "switcher-config",
 ]
 
 [[package]]
@@ -1153,6 +1135,25 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cosmic-windows-swapper"
+version = "0.1.6"
+dependencies = [
+ "anyhow",
+ "clap",
+ "cosmic-protocols",
+ "env_logger",
+ "freedesktop-desktop-entry",
+ "libc",
+ "libcosmic",
+ "log",
+ "memmap2 0.9.11",
+ "switcher-config",
+ "tokio",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]
@@ -4758,7 +4759,7 @@ dependencies = [
 
 [[package]]
 name = "switcher-config"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "serde",
 ]

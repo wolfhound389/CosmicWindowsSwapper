@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# cosmic-ext-app-switcher — standalone installer
+# cosmic-windows-swapper — standalone installer
 # Downloads pre-built binaries from GitHub Releases (no Rust required).
-# Usage: curl -fsSL https://raw.githubusercontent.com/j0rdiun/cosmic-ext-app-switcher/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/wolfhound389/CosmicWindowsSwapper/main/install.sh | bash
 
-REPO="j0rdiun/cosmic-ext-app-switcher"
+REPO="wolfhound389/CosmicWindowsSwapper"
 INSTALL_DIR="$HOME/.local/bin"
 APPS_DIR="$HOME/.local/share/applications"
 ICONS_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
-BINARY="cosmic-ext-app-switcher"
-APPLET="cosmic-ext-applet-app-switcher"
-APPLET_DESKTOP_ID="io.github.cosmic-ext-applet-app-switcher"
-SVG_NAME="io.github.cosmic-ext-applet-app-switcher-symbolic.svg"
+BINARY="cosmic-windows-swapper"
+APPLET="cosmic-applet-windows-swapper"
+APPLET_DESKTOP_ID="io.github.wolfhound389.CosmicWindowsSwapper.applet"
+SVG_NAME="io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic.svg"
 # Piped (curl | bash) means there is no script file, and `dirname ""` would resolve to the
 # current directory — letting whatever the user happens to have cd'd into masquerade as a
 # checkout of this repo and supply its scripts/. Only trust a real script path.
@@ -46,7 +46,7 @@ if ! command -v cosmic-comp &>/dev/null && [ ! -d "$HOME/.config/cosmic" ]; then
 fi
 
 # ── Migrate from old binary name ─────────────────────────────────────────────
-OLD_BINARY="cosmic-app-switcher"
+OLD_BINARY="cosmic-windows-swapper"
 if [ -f "$INSTALL_DIR/$OLD_BINARY" ]; then
     echo "Migrating from $OLD_BINARY to $BINARY..."
     rm -f "$INSTALL_DIR/$OLD_BINARY"
@@ -70,7 +70,7 @@ else
 fi
 
 # Match on the asset *filename* only. Matching anywhere in the line would also hit the
-# repository name inside every asset URL ("…/cosmic-ext-app-switcher/releases/download/…"),
+# repository name inside every asset URL ("…/cosmic-windows-swapper/releases/download/…"),
 # which returned two URLs for the switcher and made curl fail with
 # "URL rejected: Malformed input to a URL function".
 get_url() {                                     # $1 = exact asset filename
@@ -122,10 +122,10 @@ if [ -n "$APPLET_URL" ]; then
     cat > "$APPS_DIR/$APPLET_DESKTOP_ID.desktop" <<'DESKTOP'
 [Desktop Entry]
 Name=App Switcher Settings
-Comment=Set the visual theme for cosmic-ext-app-switcher
+Comment=Set the visual theme for cosmic-windows-swapper
 Type=Application
-Exec=cosmic-ext-applet-app-switcher
-Icon=io.github.cosmic-ext-applet-app-switcher-symbolic
+Exec=cosmic-applet-windows-swapper
+Icon=io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic
 Terminal=false
 NoDisplay=true
 X-CosmicApplet=true
@@ -165,7 +165,7 @@ else
         CONFIG="${VERSION_DIR:-$SHORTCUTS_DIR/v1}/system_actions"
     fi
 
-    if [ -f "$CONFIG" ] && grep -q "cosmic-ext-app-switcher" "$CONFIG"; then
+    if [ -f "$CONFIG" ] && grep -q "cosmic-windows-swapper" "$CONFIG"; then
         echo "Shortcut already registered."
     else
         # Rebuild the RON map rather than patching it: a file left without its braces
@@ -205,4 +205,4 @@ fi
 echo ""
 echo "Done! Press Super+Tab or Alt+Tab to try it."
 echo "Add the 'App Switcher Settings' applet to your COSMIC panel to change themes."
-echo "To uninstall: bash <(curl -fsSL https://raw.githubusercontent.com/j0rdiun/cosmic-ext-app-switcher/main/uninstall.sh)"
+echo "To uninstall: bash <(curl -fsSL https://raw.githubusercontent.com/wolfhound389/CosmicWindowsSwapper/main/uninstall.sh)"

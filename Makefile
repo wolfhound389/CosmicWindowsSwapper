@@ -1,11 +1,11 @@
-SWITCHER    := cosmic-ext-app-switcher
-APPLET      := cosmic-ext-applet-app-switcher
+SWITCHER    := cosmic-windows-swapper
+APPLET      := cosmic-applet-windows-swapper
 INSTALL_DIR := $(HOME)/.local/bin
 APPS_DIR    := $(HOME)/.local/share/applications
 SWITCHER_BIN := target/release/$(SWITCHER)
 APPLET_BIN  := target/release/$(APPLET)
-DESKTOP     := applet/data/io.github.cosmic-ext-applet-app-switcher.desktop
-ICON_SRC    := applet/data/io.github.cosmic-ext-applet-app-switcher-symbolic.svg
+DESKTOP     := applet-windows-swapper/data/io.github.wolfhound389.CosmicWindowsSwapper.applet.desktop
+ICON_SRC    := applet-windows-swapper/data/io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic.svg
 ICONS_DIR   := $(HOME)/.local/share/icons/hicolor/scalable/apps
 
 .PHONY: all build install uninstall enable disable status reinstall check-compat
@@ -24,8 +24,8 @@ install: build
 	@mkdir -p $(INSTALL_DIR) $(APPS_DIR) $(ICONS_DIR)
 	install -Dm755 $(SWITCHER_BIN) $(INSTALL_DIR)/$(SWITCHER)
 	install -Dm755 $(APPLET_BIN) $(INSTALL_DIR)/$(APPLET)
-	install -Dm644 $(DESKTOP) $(APPS_DIR)/io.github.cosmic-ext-applet-app-switcher.desktop
-	install -Dm644 $(ICON_SRC) $(ICONS_DIR)/io.github.cosmic-ext-applet-app-switcher-symbolic.svg
+	install -Dm644 $(DESKTOP) $(APPS_DIR)/io.github.wolfhound389.CosmicWindowsSwapper.applet.desktop
+	install -Dm644 $(ICON_SRC) $(ICONS_DIR)/io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic.svg
 	@$(MAKE) enable
 	@echo ""
 	@echo "Installed and enabled. Press Super+Tab or Alt+Tab to try it."
@@ -35,8 +35,8 @@ uninstall:
 	@$(MAKE) disable
 	@rm -f $(INSTALL_DIR)/$(SWITCHER)
 	@rm -f $(INSTALL_DIR)/$(APPLET)
-	@rm -f $(APPS_DIR)/io.github.cosmic-ext-applet-app-switcher.desktop
-	@rm -f $(ICONS_DIR)/io.github.cosmic-ext-applet-app-switcher-symbolic.svg
+	@rm -f $(APPS_DIR)/io.github.wolfhound389.CosmicWindowsSwapper.applet.desktop
+	@rm -f $(ICONS_DIR)/io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic.svg
 	@echo "Uninstalled. COSMIC default switcher restored."
 
 enable:

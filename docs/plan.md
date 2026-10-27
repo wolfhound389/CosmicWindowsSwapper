@@ -1,4 +1,4 @@
-# cosmic-ext-app-switcher
+# cosmic-windows-swapper
 
 A macOS-style horizontal app switcher for COSMIC desktop on Pop!_OS. Replaces the default vertical Super+Tab switcher with a compact, centered strip of app icons.
 
@@ -36,7 +36,7 @@ make reinstall  # uninstall then install (useful for updates)
 ## Project Structure
 
 ```
-cosmic-ext-app-switcher/
+cosmic-windows-swapper/
 ├── docs/
 │   └── plan.md           # this file
 ├── scripts/
@@ -76,7 +76,7 @@ sudo apt install libxkbcommon-dev
 
 ```toml
 [package]
-name = "cosmic-ext-app-switcher"
+name = "cosmic-windows-swapper"
 version = "0.1.0"
 edition = "2021"
 
@@ -206,12 +206,12 @@ Message::KeyEvent(keyboard::Event::ModifiersChanged(mods)) => {
 ```ron
 {
     Terminal: "/usr/bin/ghostty --gtk-single-instance=true",
-    WindowSwitcher: "/home/jordan/.local/bin/cosmic-ext-app-switcher",
-    WindowSwitcherPrevious: "/home/jordan/.local/bin/cosmic-ext-app-switcher --reverse",
+    WindowSwitcher: "/home/jordan/.local/bin/cosmic-windows-swapper",
+    WindowSwitcherPrevious: "/home/jordan/.local/bin/cosmic-windows-swapper --reverse",
 }
 ```
 
-`scripts/disable.sh` removes those two lines (sed-based, keyed on `cosmic-ext-app-switcher`).
+`scripts/disable.sh` removes those two lines (sed-based, keyed on `cosmic-windows-swapper`).
 
 cosmic-comp watches this file and reloads live — no restart needed in either direction.
 

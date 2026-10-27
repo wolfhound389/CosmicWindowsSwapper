@@ -1,7 +1,44 @@
 use serde::{Deserialize, Serialize};
 
-pub const APP_ID: &str = "io.github.cosmic-ext-app-switcher";
+pub const APP_ID: &str = "io.github.wolfhound389.CosmicWindowsSwapper";
 pub const CONFIG_VERSION: u64 = 1;
+
+/// App IDs used before the project was renamed to CosmicWindowsSwapper, newest first.
+pub const LEGACY_APP_IDS: [&str; 1] = ["io.github.cosmic-ext-app-switcher"];
+
+/// Copy a config directory from an older app id the first time the new id is used, so a
+/// theme picked before the rename survives it. Returns the source directory that was
+/// copied, if any. Never overwrites an existing non-empty target.
+pub fn migrate_legacy_config(target_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    // Only refuse when the target already holds something *and* it really is a directory:
+    // a missing (or unreadable) target is exactly the fresh-install case we want to seed.
+    if target_dir.is_dir() && target_dir.read_dir().map(|mut d| d.next().is_some()).unwrap_or(true) {
+        return None;
+    }
+    let cosmic = target_dir.parent()?.parent()?;
+    for old in LEGACY_APP_IDS {
+        let src = cosmic.join(old).join(format!("v{CONFIG_VERSION}"));
+        if src.is_dir() {
+            copy_dir(&src, target_dir).ok()?;
+            return Some(src);
+        }
+    }
+    None
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let dst = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &dst)?;
+        } else {
+            std::fs::copy(entry.path(), &dst)?;
+        }
+    }
+    Ok(())
+}
 
 /// How the overlay arranges the windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -234,6 +271,42 @@ mod tests {
         let s = Style { columns: 2, ..Default::default() };
         assert_eq!(s.columns_for(9), 2);
         assert_eq!(s.columns_for(1), 1);
+    }
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cws-config-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn legacy_config_is_migrated_once() {
+        let root = tmpdir("migrate");
+        let cosmic = root.join("cosmic");
+        let old = cosmic.join(LEGACY_APP_IDS[0]).join("v1");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("theme"), b"Midnight").unwrap();
+        let new = cosmic.join(APP_ID).join("v1");
+
+        // Migration copies the file…
+        assert_eq!(migrate_legacy_config(&new).as_deref(), Some(old.as_path()));
+        assert_eq!(std::fs::read(new.join("theme")).unwrap(), b"Midnight");
+
+        // …and never runs again, so a later choice is not clobbered by the old value.
+        std::fs::write(new.join("theme"), b"Light").unwrap();
+        assert_eq!(migrate_legacy_config(&new), None);
+        assert_eq!(std::fs::read(new.join("theme")).unwrap(), b"Light");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migration_is_a_noop_without_a_legacy_config() {
+        let root = tmpdir("nomigrate");
+        let new = root.join("cosmic").join(APP_ID).join("v1");
+        assert_eq!(migrate_legacy_config(&new), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

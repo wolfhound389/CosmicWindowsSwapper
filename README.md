@@ -1,6 +1,13 @@
-# cosmic-ext-app-switcher
+# CosmicWindowsSwapper
 
-A macOS-style horizontal app switcher for the [COSMIC desktop](https://system76.com/cosmic) on Pop!_OS — replacing the default vertical Super+Tab list with a compact icon strip centered on screen.
+A Windows/KDE-style app switcher for the [COSMIC desktop](https://system76.com/cosmic) on
+Pop!_OS — replacing the default vertical Super+Tab list with a centered panel of live window
+previews and titles (the classic icon strip is still available as a layout option).
+
+> **Renamed project:** this used to be `cosmic-ext-app-switcher`. The binaries are now
+> `cosmic-windows-swapper` and `cosmic-applet-windows-swapper`, and the app id is
+> `io.github.wolfhound389.CosmicWindowsSwapper`. Your existing settings are copied over
+> automatically on first launch.
 
 <table align="center">
   <tr>
@@ -20,7 +27,7 @@ A macOS-style horizontal app switcher for the [COSMIC desktop](https://system76.
 **One-line (no Rust required):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/j0rdiun/cosmic-ext-app-switcher/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wolfhound389/CosmicWindowsSwapper/main/install.sh | bash
 ```
 
 **Or build from source:**
@@ -30,8 +37,8 @@ curl -fsSL https://raw.githubusercontent.com/j0rdiun/cosmic-ext-app-switcher/mai
 sudo apt install libxkbcommon-dev
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source ~/.cargo/env
 
-git clone https://github.com/j0rdiun/cosmic-ext-app-switcher
-cd cosmic-ext-app-switcher
+git clone https://github.com/wolfhound389/CosmicWindowsSwapper
+cd CosmicWindowsSwapper
 make install
 ```
 
@@ -44,7 +51,7 @@ Changes take effect immediately — no logout required.
 > clients without a Wayland security context, and Flatpak always attaches one, so a
 > sandboxed build can neither list your windows nor draw the overlay. Super+Tab silently
 > does nothing. Measurements are in
-> [#10](https://github.com/j0rdiun/cosmic-ext-app-switcher/issues/10); System76 confirmed
+> [#10](https://github.com/wolfhound389/CosmicWindowsSwapper/issues/10); System76 confirmed
 > there is no path for it today in
 > [cosmic-comp#2734](https://github.com/pop-os/cosmic-comp/issues/2734#issuecomment-5293857795), and are planning
 > configurable `cosmic-session` components to allow it in future.
@@ -59,8 +66,8 @@ Changes take effect immediately — no logout required.
 > switcher. To clean up:
 >
 > ```bash
-> flatpak uninstall io.github.cosmic-ext-applet-app-switcher
-> curl -fsSL https://raw.githubusercontent.com/j0rdiun/cosmic-ext-app-switcher/main/uninstall.sh | bash
+> flatpak uninstall io.github.wolfhound389.CosmicWindowsSwapper.applet
+> curl -fsSL https://raw.githubusercontent.com/wolfhound389/CosmicWindowsSwapper/main/uninstall.sh | bash
 > ```
 >
 > The second command rewrites COSMIC's shortcut config and restores the default switcher.
@@ -71,7 +78,7 @@ Changes take effect immediately — no logout required.
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/j0rdiun/cosmic-ext-app-switcher/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wolfhound389/CosmicWindowsSwapper/main/uninstall.sh | bash
 ```
 
 Or from the project directory:
@@ -90,18 +97,37 @@ make uninstall
 | Super+Shift+Tab / Alt+Shift+Tab | Cycle backward |
 | Modifier release | Activate selected window |
 | Escape | Cancel — return to original window |
-| Click icon | Select |
-| Release click | Activate |
+| Click a preview | Select and activate it |
+
+### Layouts
+
+Two layouts ship, both fully themable:
+
+- **Previews** (default) — the Windows/KDE-style grid of live window thumbnails with titles, arranged roughly square on screen.
+- **Icons** — the original macOS-style horizontal strip of app icons.
+
+Switch between them from the panel applet. **Preview size** (S / M / L) and a
+**Show window titles** toggle sit next to it; every other knob — gap, padding, corner
+radius, selection ring, column count, icon visibility — lives in the `style` section of
+the config file:
+
+```ron
+style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0,show_titles:true,show_icons:true,radius:10.0,border:2.5),
+```
+
+Set `columns` to a number between 1 and 5 to pin the grid width; `0` picks it from the
+window count.
 
 ---
 
 ## Panel applet
 
-> **Tip:** After installing, right-click your COSMIC panel → **Edit Panel** → **Add Applet** → search for **App Switcher Settings** and add it. This gives you a one-click toggle and theme picker directly in your panel.
+> **Tip:** After installing, right-click your COSMIC panel → **Edit Panel** → **Add Applet** → search for **Windows Swapper Settings** and add it. This gives you a one-click toggle and theme picker directly in your panel.
 
-Add the **App Switcher Settings** applet to your COSMIC panel for quick access to:
+Add the **Windows Swapper Settings** applet to your COSMIC panel for quick access to:
 - **Super+Tab shortcut** toggle — enable or disable without touching the terminal
 - **Theme picker** — Dark, Light, Frosted, or Midnight
+- **Layout** — preview grid or icon strip, preview size, and window titles
 
 ## Enable / Disable
 

@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.cosmic-ext-applet-app-switcher</id>
+  <id>io.github.wolfhound389.CosmicWindowsSwapper.applet</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
   <project_group>COSMIC</project_group>
-  <developer id="io.github.j0rdiun">
-    <name>j0rdiun</name>
+  <developer id="io.github.wolfhound389">
+    <name>wolfhound389</name>
   </developer>
-  <name>App Switcher</name>
-  <summary>macOS-style Super+Tab app switcher for COSMIC</summary>
-  <url type="homepage">https://github.com/j0rdiun/cosmic-ext-app-switcher</url>
-  <url type="bugtracker">https://github.com/j0rdiun/cosmic-ext-app-switcher/issues</url>
-  <url type="contribute">https://github.com/j0rdiun/cosmic-ext-app-switcher</url>
+  <name>Cosmic Windows Swapper</name>
+  <summary>Windows/KDE-style Super+Tab window switcher for COSMIC</summary>
+  <url type="homepage">https://github.com/wolfhound389/CosmicWindowsSwapper</url>
+  <url type="bugtracker">https://github.com/wolfhound389/CosmicWindowsSwapper/issues</url>
+  <url type="contribute">https://github.com/wolfhound389/CosmicWindowsSwapper</url>
   <content_rating type="oars-1.1" />
   <branding>
     <color type="primary" scheme_preference="light">#f0f0f0</color>
@@ -28,15 +28,15 @@
       keyboard shortcut automatically. No terminal required.
     </p>
   </description>
-  <icon type="stock">io.github.cosmic-ext-applet-app-switcher-symbolic</icon>
-  <launchable type="desktop-id">io.github.cosmic-ext-applet-app-switcher.desktop</launchable>
+  <icon type="stock">io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic</icon>
+  <launchable type="desktop-id">io.github.wolfhound389.CosmicWindowsSwapper.applet.desktop</launchable>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/j0rdiun/cosmic-ext-app-switcher/main/docs/screenshot-overlay.png</image>
+      <image>https://raw.githubusercontent.com/wolfhound389/CosmicWindowsSwapper/main/docs/screenshot-overlay.png</image>
       <caption>Super+Tab overlay — horizontal icon strip with selected app highlighted</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/j0rdiun/cosmic-ext-app-switcher/main/docs/screenshot-applet.png</image>
+      <image>https://raw.githubusercontent.com/wolfhound389/CosmicWindowsSwapper/main/docs/screenshot-applet.png</image>
       <caption>Panel applet — theme picker and shortcut toggle</caption>
     </screenshot>
   </screenshots>
@@ -44,6 +44,13 @@
     <!-- The newest entry here is the version the COSMIC Store displays. Keep it in sync
          with [workspace.package] version in Cargo.toml and the git tag; the release
          workflow refuses to publish when they disagree. -->
+    <release version="0.1.6" date="2026-10-28">
+      <description>
+        <p>New Windows/KDE-style layout: Super+Tab now shows a grid of live window previews with titles. The previous icon strip is still available as the Icons layout.</p>
+        <p>The panel applet can now switch layouts, pick a preview size, and toggle window titles, and it writes those settings to the same config file the overlay reads.</p>
+        <p>The project is renamed to CosmicWindowsSwapper: app id, binary names, desktop entry, and icon all change, and an existing config and shortcut binding are migrated on first launch.</p>
+      </description>
+    </release>
     <release version="0.1.5" date="2026-08-13">
       <description>
         <p>Fixes the one-line installer, which downloaded a malformed URL and failed for everyone.</p>
@@ -63,8 +70,8 @@
   </releases>
   <provides>
     <id>com.system76.CosmicApplet</id>
-    <binary>cosmic-ext-applet-app-switcher</binary>
-    <binary>cosmic-ext-app-switcher</binary>
+    <binary>cosmic-applet-windows-swapper</binary>
+    <binary>cosmic-windows-swapper</binary>
   </provides>
   <categories>
     <category>Utility</category>

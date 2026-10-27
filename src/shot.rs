@@ -2,7 +2,7 @@
 //! a PPM. Used to eyeball the overlay without the desktop screenshot portal (which needs a
 //! writable runtime dir and a confirmation dialog).
 //!
-//! Reachable as `cosmic-ext-app-switcher --screenshot /tmp/shot.ppm`.
+//! Reachable as `cosmic-windows-swapper --screenshot /tmp/shot.ppm`.
 
 use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
@@ -182,7 +182,7 @@ pub fn capture_screen(path: &std::path::Path) -> Result<()> {
 }
 
 fn memfd(size: usize) -> Result<OwnedFd> {
-    let name = std::ffi::CString::new("cosmic-app-switcher-shot").unwrap();
+    let name = std::ffi::CString::new("cosmic-windows-swapper-shot").unwrap();
     let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
     if fd < 0 {
         return Err(std::io::Error::last_os_error()).context("memfd_create failed");

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BINARY="$HOME/.local/bin/cosmic-ext-app-switcher"
+BINARY="$HOME/.local/bin/cosmic-windows-swapper"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=scripts/shortcut-config.sh
@@ -29,7 +29,7 @@ case "$rc" in
         ;;
 esac
 
-if grep -q "cosmic-ext-app-switcher" "$CONFIG"; then
+if grep -q "cosmic-windows-swapper" "$CONFIG"; then
     echo "Already enabled."
     exit 0
 fi

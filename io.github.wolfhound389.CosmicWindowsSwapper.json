@@ -1,10 +1,10 @@
 {
-  "id": "io.github.cosmic-ext-applet-app-switcher",
+  "id": "io.github.wolfhound389.CosmicWindowsSwapper.applet",
   "runtime": "org.freedesktop.Platform",
   "runtime-version": "25.08",
   "sdk": "org.freedesktop.Sdk",
   "sdk-extensions": ["org.freedesktop.Sdk.Extension.rust-stable"],
-  "command": "cosmic-ext-applet-app-switcher",
+  "command": "cosmic-applet-windows-swapper",
   "finish-args": [
     "--share=ipc",
     "--socket=wayland",
@@ -21,21 +21,21 @@
   "build-options": {
     "append-path": "/usr/lib/sdk/rust-stable/bin",
     "env": {
-      "CARGO_HOME": "/run/build/cosmic-ext-app-switcher/cargo"
+      "CARGO_HOME": "/run/build/cosmic-windows-swapper/cargo"
     }
   },
   "modules": [
     {
-      "name": "cosmic-ext-app-switcher",
+      "name": "cosmic-windows-swapper",
       "buildsystem": "simple",
       "build-commands": [
         "cargo --offline fetch --manifest-path Cargo.toml --verbose",
         "cargo --offline build --release --workspace --verbose",
-        "install -Dm0755 target/release/cosmic-ext-app-switcher /app/bin/cosmic-ext-app-switcher",
-        "install -Dm0755 target/release/cosmic-ext-applet-app-switcher /app/bin/cosmic-ext-applet-app-switcher",
-        "install -Dm0644 applet/data/io.github.cosmic-ext-applet-app-switcher.desktop /app/share/applications/io.github.cosmic-ext-applet-app-switcher.desktop",
-        "install -Dm0644 applet/data/io.github.cosmic-ext-applet-app-switcher.metainfo.xml /app/share/metainfo/io.github.cosmic-ext-applet-app-switcher.metainfo.xml",
-        "install -Dm0644 applet/data/io.github.cosmic-ext-applet-app-switcher-symbolic.svg /app/share/icons/hicolor/scalable/apps/io.github.cosmic-ext-applet-app-switcher-symbolic.svg"
+        "install -Dm0755 target/release/cosmic-windows-swapper /app/bin/cosmic-windows-swapper",
+        "install -Dm0755 target/release/cosmic-applet-windows-swapper /app/bin/cosmic-applet-windows-swapper",
+        "install -Dm0644 applet-windows-swapper/data/io.github.wolfhound389.CosmicWindowsSwapper.applet.desktop /app/share/applications/io.github.wolfhound389.CosmicWindowsSwapper.applet.desktop",
+        "install -Dm0644 applet-windows-swapper/data/io.github.wolfhound389.CosmicWindowsSwapper.applet.metainfo.xml /app/share/metainfo/io.github.wolfhound389.CosmicWindowsSwapper.applet.metainfo.xml",
+        "install -Dm0644 applet-windows-swapper/data/io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic.svg /app/share/icons/hicolor/scalable/apps/io.github.wolfhound389.CosmicWindowsSwapper.applet-symbolic.svg"
       ],
       "sources": [
         {

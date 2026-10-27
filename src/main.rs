@@ -14,11 +14,11 @@ use switcher_config::{Style, Theme, WorkspaceScope, APP_ID, CONFIG_VERSION};
 
 pub fn socket_path() -> std::path::PathBuf {
     let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(dir).join("cosmic-ext-app-switcher.sock")
+    std::path::PathBuf::from(dir).join("cosmic-windows-swapper.sock")
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "cosmic-ext-app-switcher", version)]
+#[command(name = "cosmic-windows-swapper", version)]
 pub struct Args {
     /// Move the selection backwards (Shift+Tab).
     #[arg(long, default_value_t = false)]
@@ -29,7 +29,24 @@ pub struct Args {
     pub screenshot: Option<std::path::PathBuf>,
 }
 
+/// Where cosmic-config keeps this app's files (mirrors its own path scheme).
+fn config_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+        .ok()?;
+    Some(base.join("cosmic").join(APP_ID).join(format!("v{CONFIG_VERSION}")))
+}
+
+fn migrate_config_once() {
+    let Some(dir) = config_dir() else { return };
+    if let Some(from) = switcher_config::migrate_legacy_config(&dir) {
+        log::info!("migrated config from {} to {}", from.display(), dir.display());
+    }
+}
+
 fn load_config() -> (Theme, WorkspaceScope, Style) {
+    migrate_config_once();
     let Ok(config) = Config::new(APP_ID, CONFIG_VERSION) else {
         return (Theme::default(), WorkspaceScope::default(), Style::default());
     };
