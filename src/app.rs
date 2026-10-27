@@ -44,6 +44,13 @@ pub struct AppSwitcher {
     /// own value so the card that loses focus can shrink smoothly at the same time as the
     /// newly focused one bounces up, instead of snapping back to its resting size.
     pub hover:    Vec<f32>,
+    /// Time elapsed since the current focus change, in seconds. Restarted by every key
+    /// that moves focus, which is what makes the "smooth bouncing" replay on each press
+    /// instead of running once after startup. `None` until the first move.
+    pub bounce_age: Option<f32>,
+    /// Card index the current bounce belongs to, so the animation can be restarted even
+    /// when the same card is selected twice in a row (e.g. wrapping around).
+    pub bounce_from: usize,
     /// Timestamp of the previous animation tick (for frame-rate independent easing).
     pub last_tick: Instant,
     /// Keys replayed so far from `COSMIC_SWITCHER_TEST_KEYS`.
@@ -94,6 +101,21 @@ fn test_mode() -> Option<Duration> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .map(Duration::from_millis)
+}
+
+impl AppSwitcher {
+    /// Move focus to `index` and restart the "smooth bouncing" animation from the
+    /// beginning. Every key that changes the selection goes through here, so holding the
+    /// modifier and tapping Tab replays the bounce on *each* press.
+    fn select_at(&mut self, index: usize) {
+        if index != self.selected {
+            self.bounce_from = self.selected;
+        }
+        self.selected = index;
+        // Reset the clock so the easing always starts at 0 whatever the previous state.
+        self.bounce_age = Some(0.0);
+    }
+
 }
 
 impl Application for AppSwitcher {
@@ -178,6 +200,8 @@ impl Application for AppSwitcher {
             test_deadline: test.map(|d| Instant::now() + d),
             finished: false,
             hover: Vec::new(),
+            bounce_age: None,
+            bounce_from: usize::MAX,
             last_tick: Instant::now(),
             injected: Vec::new(),
             hovered: None,
@@ -193,19 +217,19 @@ impl Application for AppSwitcher {
         }
         match msg {
             Message::SelectNext => {
-                self.selected = (self.selected + 1) % n;
+                self.select_at((self.selected + 1) % n);
             }
             Message::SelectPrev => {
-                self.selected = (self.selected + n - 1) % n;
+                self.select_at((self.selected + n - 1) % n);
             }
             Message::SelectIndex(i) => {
-                self.selected = i.min(n - 1);
+                self.select_at(i.min(n - 1));
             }
             Message::MoveRow(delta) => {
                 let cols = self.metrics.cols.max(1) as isize;
                 let target = self.selected as isize + delta * cols;
                 let next = target.clamp(0, n as isize - 1) as usize;
-                self.selected = next;
+                self.select_at(next);
             }
             Message::InjectKey => {
                 let keys = test_keys();
@@ -236,12 +260,23 @@ impl Application for AppSwitcher {
             Message::AnimTick => {
                 let dt = (Instant::now() - self.last_tick).as_secs_f32().clamp(0.0, 0.1);
                 self.last_tick = Instant::now();
-                // Grow the newly selected card, shrink every other one. Both directions
-                // run on the same tick so the hand-off between two cards is continuous.
+                // The bounce is driven by a clock that restarts on each focus change, so
+                // the easing plays from the beginning every time Tab is pressed.
+                if let Some(age) = self.bounce_age.as_mut() {
+                    *age += dt;
+                }
+                let age = self.bounce_age.unwrap_or(f32::INFINITY);
                 self.hover.resize(n, 0.0);
                 for (i, value) in self.hover.iter_mut().enumerate() {
-                    let target = if i == self.selected { 1.0 } else { 0.0 };
-                    *value = Animation::step(*value, target, dt);
+                    // The dwell lets the outgoing card shrink a touch before the incoming
+                    // one springs, which reads as a bounce rather than a cross-fade.
+                    if i == self.selected {
+                        *value = Animation::rise(age);
+                    } else if i == self.bounce_from {
+                        *value = (Animation::REST_AFTER - age * 1.6).max(0.0);
+                    } else {
+                        *value = 0.0;
+                    }
                 }
             }
             Message::CloseIndex(i) => {
@@ -398,9 +433,14 @@ impl Application for AppSwitcher {
         };
 
         // Drive the selection "pop" animation until it settles.
-        // Note: an empty `hover` (just before the first tick) must count as *unsettled*,
-        // otherwise `all()` returns true and the animation never starts at all.
-        let anim_sub = if self.hover.len() >= self.entries.len() && self.hover.iter().all(|v| Animation::settled(*v)) {
+        // Keep ticking for as long as the bounce clock is running. Checking the clock
+        // rather than the settled values is what stops the animation from dying after the
+        // first play and never restarting.
+        let running = self
+            .bounce_age
+            .map(|age| age < Animation::DURATION)
+            .unwrap_or(false);
+        let anim_sub = if !running && self.hover.len() >= self.entries.len() && self.hover.iter().all(|v| Animation::settled(*v)) {
             Subscription::none()
         } else {
             cosmic::iced::time::every(Duration::from_millis(16)).map(|_| Message::AnimTick)

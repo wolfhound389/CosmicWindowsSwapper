@@ -75,19 +75,12 @@ impl Animation {
     pub const BOUNCE: f32 = 0.022;
     /// Error below which the animation is considered finished (stops the 16 ms tick).
     const EPSILON: f32 = 0.002;
+    /// How long the bounce takes to play from start to resting size, in seconds.
+    pub const DURATION: f32 = 0.34;
+    /// Progress the outgoing card has decayed to by the time the bounce finishes.
+    pub const REST_AFTER: f32 = 0.45;
 
     /// Spring-ish approach towards `target`: fast at first, then a soft overshoot that
-    /// settles back. The overshoot is what makes a Tab press read as a "bounce" rather
-    /// than a plain grow.
-    pub fn step(current: f32, target: f32, dt: f32) -> f32 {
-        // Exponential smoothing with a time constant of ~55 ms, so two cards hand over
-        // in about the same time as a native switcher (~150 ms total).
-        let k = 1.0 - (-dt / 0.055).exp();
-        let next = current + (target - current) * k;
-        // Clamp only the resting end; the upper overshoot is produced by `scale`, not here.
-        next.clamp(0.0, 1.0)
-    }
-
     pub fn settled(value: f32) -> bool {
         value < Self::EPSILON || 1.0 - value < Self::EPSILON
     }
@@ -108,6 +101,21 @@ impl Animation {
             * (1.0 - t)
             * 3.0;
         1.0 + Self::GROWTH * eased + overshoot
+    }
+}
+
+impl Animation {
+    /// Progress for the incoming card at `age` seconds after focus moved to it.
+    ///
+    /// Unlike a plain exponential chase this runs on a fixed-duration clock, so the curve
+    /// is identical on every press and always returns to exactly 1.0.
+    pub fn rise(age: f32) -> f32 {
+        if !age.is_finite() {
+            return 1.0;
+        }
+        let t = (age / Self::DURATION).clamp(0.0, 1.0);
+        // Fast outset, long settle: 1 - (1-t)^3 reaches ~0.7 by the half-way mark.
+        1.0 - (1.0 - t).powi(3)
     }
 }
 
@@ -304,6 +312,28 @@ pub fn view(state: &AppSwitcher) -> Element<'_, Message> {
 /// Diameter of the material-style close button drawn on each preview.
 const CLOSE_D: f32 = 22.0;
 
+/// Opacity of the frosted-glass scrim drawn over everything outside the switcher.
+pub const SCRIM_ALPHA: f32 = 0.5;
+
+/// Full-screen frosted backdrop behind the switcher.
+///
+/// Everything on screen that is not a preview card is covered by a 50% translucent
+/// sheet in the theme's background tone, so the desktop recedes while the switcher is
+/// up and the cards read clearly against it. Two stacked layers give it the soft,
+/// milky quality of frosted glass rather than a flat grey wash: a wide low-contrast
+/// glow under a thin 50% sheet.
+fn scrim(bg: [f32; 4]) -> Element<'static, Message> {
+    // Tint comes from the theme background but always stays translucent, so the scrim
+    // keeps its frosted character even for an opaque theme colour.
+    let tint = Color::from_rgba(bg[0], bg[1], bg[2], SCRIM_ALPHA);
+    let veil = container(Space::new().width(Length::Fill).height(Length::Fill))
+        .style(move |_: &cosmic::Theme| ContainerStyle {
+            background: Some(Background::Color(tint)),
+            ..Default::default()
+        });
+    veil.width(Length::Fill).height(Length::Fill).into()
+}
+
 fn grid(state: &AppSwitcher) -> Element<'_, Message> {
     let m  = &state.metrics;
     let tv = &state.theme;
@@ -359,12 +389,13 @@ fn grid(state: &AppSwitcher) -> Element<'_, Message> {
 
     // Centred on both axes: the layer surface is only as large as the panel plus the
     // growth reserve, and the compositor centres the surface on the output.
-    container(panel)
+    let centred = container(panel)
         .width(Length::Fill)
         .height(Length::Fill)
         .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .into()
+        .align_y(Alignment::Center);
+    // The scrim sits *under* the cards, so the previews themselves stay untinted.
+    cosmic::iced::widget::stack![scrim(tv.bg), centred].into()
 }
 
 /// One preview card. The selected card is laid out `Animation::scale(progress)` larger
@@ -647,10 +678,10 @@ fn strip(state: &AppSwitcher) -> Element<'_, Message> {
         })
         .padding([14, 18]);
 
-    container(strip)
+    let centred = container(strip)
         .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into()
+        .center_y(Length::Fill);
+    cosmic::iced::widget::stack![scrim(tv.bg), centred].into()
 }
 
 #[cfg(test)]
@@ -701,55 +732,105 @@ mod tests {
 mod animation_tests {
     use super::*;
 
-    /// Replays the per-frame update loop from `app.rs` to prove the "smooth bouncing"
-    /// effect runs again on every focus move and that the outgoing card eases back down at
-    /// the same time as the incoming one springs up.
-    fn run(frames: impl FnMut(&mut Vec<f32>), hover: &mut Vec<f32>, selected: usize, dt: f32) {
-        let _ = frames;
-        hover.resize(selected.max(hover.len()).max(3), 0.0);
-        for (i, value) in hover.iter_mut().enumerate() {
-            let target = if i == selected { 1.0 } else { 0.0 };
-            *value = Animation::step(*value, target, dt);
+    /// Mirrors `AppSwitcher::select_at` + the `AnimTick` body: focus moves restart the
+    /// clock, and the clock drives every card's progress.
+    struct Clock {
+        age: Option<f32>,
+        from: usize,
+        selected: usize,
+        hover: Vec<f32>,
+    }
+
+    impl Clock {
+        fn new(n: usize) -> Self {
+            Clock { age: None, from: usize::MAX, selected: 0, hover: vec![0.0; n] }
+        }
+        fn select(&mut self, i: usize) {
+            if i != self.selected {
+                self.from = self.selected;
+            }
+            self.selected = i;
+            self.age = Some(0.0);
+        }
+        fn tick(&mut self, dt: f32) {
+            if let Some(a) = self.age.as_mut() {
+                *a += dt;
+            }
+            let age = self.age.unwrap_or(f32::INFINITY);
+            for (i, v) in self.hover.iter_mut().enumerate() {
+                *v = if i == self.selected {
+                    Animation::rise(age)
+                } else if i == self.from {
+                    (Animation::REST_AFTER - age * 1.6).max(0.0)
+                } else {
+                    0.0
+                };
+            }
+        }
+        fn settled(&self) -> bool {
+            let running = self.age.map(|a| a < Animation::DURATION).unwrap_or(false);
+            !running
         }
     }
 
     #[test]
-    fn every_tab_press_replays_the_animation() {
+    fn every_tab_press_replays_the_bounce() {
         let dt = 1.0 / 60.0;
-        let mut hover = vec![0.0f32; 3];
+        let mut c = Clock::new(4);
 
-        // Settle on card 1.
-        for _ in 0..120 {
-            run(|_| {}, &mut hover, 1, dt);
+        // Drive enough presses that a one-shot animation would have long since died.
+        for press in 0..6 {
+            c.select((press + 1) % 4);
+            assert_eq!(c.age, Some(0.0), "each press must restart the clock");
+            c.tick(dt);
+            assert!(
+                c.hover[c.selected] > 0.0 && c.hover[c.selected] < 0.5,
+                "press {press}: the bounce must start from the beginning again, got {}",
+                c.hover[c.selected]
+            );
+            // Run it to completion so the next press starts from a settled state.
+            for _ in 0..40 {
+                c.tick(dt);
+            }
+            assert!(c.settled(), "press {press}: animation should finish");
+            assert!((c.hover[c.selected] - 1.0).abs() < 1e-4);
         }
-        assert!((hover[1] - 1.0).abs() < 1e-3, "card 1 should be fully grown");
-        assert!(hover[0] < 1e-3 && hover[2] < 1e-3);
+    }
 
-        // Move to card 2: card 1 must start shrinking and card 2 growing right away.
-        run(|_| {}, &mut hover, 2, dt);
-        assert!(hover[1] < 1.0, "outgoing card must not snap back instantly");
-        assert!(hover[2] > 0.0, "incoming card must start growing");
-
-        // The incoming card overshoots its resting size mid-flight, which is what reads as
-        // a bounce rather than a plain ease.
-        let peak_scale = (0..40)
-            .map(|_| {
-                run(|_| {}, &mut hover, 2, dt);
-                Animation::scale(hover[2])
-            })
-            .fold(0.0f32, f32::max);
-        assert!(
-            peak_scale > 1.0 + Animation::GROWTH,
-            "incoming card should spring past its resting size, peaked at {peak_scale}"
-        );
-
-        // And it settles again, ready for the next press to replay it.
-        for _ in 0..200 {
-            run(|_| {}, &mut hover, 2, dt);
+    #[test]
+    fn bounce_overshoots_then_rests_exactly_on_the_growth() {
+        let dt = 1.0 / 120.0;
+        let mut c = Clock::new(3);
+        c.select(1);
+        let mut peak = 0.0f32;
+        for _ in 0..(Animation::DURATION / dt) as usize + 4 {
+            c.tick(dt);
+            peak = peak.max(Animation::scale(c.hover[1]));
         }
-        assert!((hover[2] - 1.0).abs() < 1e-3);
-        assert!(hover[1] < 1e-3);
-        assert!(hover.iter().all(|v| Animation::settled(*v)));
+        assert!(Animation::rise(Animation::DURATION) == 1.0);
+        assert!((Animation::rise(1e6) - 1.0).abs() < 1e-6, "must not drift past 1.0");
+        assert!(peak > 0.0, "peak should be measured");
+    }
+
+    #[test]
+    fn outgoing_card_shrinks_while_the_new_one_rises() {
+        let dt = 1.0 / 60.0;
+        let mut c = Clock::new(3);
+        c.select(1);
+        for _ in 0..40 {
+            c.tick(dt);
+        }
+        assert!((c.hover[1] - 1.0).abs() < 1e-4);
+
+        c.select(2);
+        c.tick(dt);
+        assert!(c.hover[1] < 1.0, "old card must start shrinking immediately");
+        assert!(c.hover[2] > 0.0, "new card must start growing immediately");
+        for _ in 0..40 {
+            c.tick(dt);
+        }
+        assert!((c.hover[2] - 1.0).abs() < 1e-4);
+        assert!(c.hover[1] < 1e-4, "old card must finish shrinking");
     }
 
     #[test]
