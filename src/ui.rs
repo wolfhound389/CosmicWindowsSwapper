@@ -8,7 +8,7 @@ use cosmic::{
     widget::icon,
     Element,
 };
-use switcher_config::{Layout, Style};
+use switcher_config::{Layout, RowMode, Style};
 
 use crate::app::{AppSwitcher, Message};
 use crate::icons::icon_name_for;
@@ -283,10 +283,37 @@ impl Metrics {
     }
 
     /// Indices of the cards to draw, in display order.
-    pub fn visible_indices(&self, selected: usize, total: usize) -> Vec<usize> {
-        let start = if self.rows == 1 { self.row_window_start(selected, total) } else { 0 };
+    ///
+    /// In `RowMode::Slide` the window is pinned at both ends of the list so the first and
+    /// last cards are reachable. In `RowMode::Carousel` the window rotates instead: the
+    /// leftmost card always leaves the screen on a focus change and the next one enters
+    /// from the right, so every press produces visible motion no matter where the
+    /// selection is.
+    pub fn visible_indices(&self, selected: usize, total: usize, mode: RowMode) -> Vec<usize> {
+        if self.rows != 1 || total == 0 {
+            return (0..total).collect();
+        }
         let count = self.visible_count(total);
-        (start..total).take(count).collect()
+        match mode {
+            RowMode::Slide => {
+                let start = self.row_window_start(selected, total);
+                (start..total).take(count).collect()
+            }
+            RowMode::Carousel => {
+                // Centre the selection in the rotating window. Offsets wrap, so the window
+                // is a ring and stepping past either end continues smoothly: every move
+                // shifts the ring by exactly one card and the leftmost window falls off.
+                //
+                // The selection sits at `count / 2`, which is the exact middle for an odd
+                // count and the left-of-centre slot for an even one. Going through
+                // `selected + total - half` keeps the arithmetic positive before taking
+                // the remainder.
+                let half = count / 2;
+                (0..count)
+                    .map(|k| (selected + total - half + k) % total)
+                    .collect()
+            }
+        }
     }
 
     /// Size of the layer surface in logical pixels.
@@ -313,18 +340,22 @@ pub fn view(state: &AppSwitcher) -> Element<'_, Message> {
 const CLOSE_D: f32 = 22.0;
 
 /// Opacity of the frosted-glass scrim drawn over everything outside the switcher.
-pub const SCRIM_ALPHA: f32 = 0.5;
+/// How far the desktop is dimmed behind the switcher.
+///
+/// The blur itself comes from the compositor (`ext_background_effect_manager_v1`), so
+/// this sheet only has to take the brightness down a notch. Keeping it light lets the
+/// blurred shapes stay readable as frosted glass instead of collapsing into flat grey.
+pub const SCRIM_ALPHA: f32 = 0.22;
 
 /// Full-screen frosted backdrop behind the switcher.
 ///
-/// Everything on screen that is not a preview card is covered by a 50% translucent
-/// sheet in the theme's background tone, so the desktop recedes while the switcher is
-/// up and the cards read clearly against it. Two stacked layers give it the soft,
-/// milky quality of frosted glass rather than a flat grey wash: a wide low-contrast
-/// glow under a thin 50% sheet.
+/// Everything on screen that is not a preview card is dimmed by a translucent sheet in
+/// the theme's background tone, on top of the blur the compositor applies to the same
+/// area. Together they read as frosted glass: the desktop is still there, softly
+/// out of focus, while the cards in front stay crisp.
 fn scrim(bg: [f32; 4]) -> Element<'static, Message> {
-    // Tint comes from the theme background but always stays translucent, so the scrim
-    // keeps its frosted character even for an opaque theme colour.
+    // The tint comes from the theme background but always stays translucent, so the
+    // scrim keeps its frosted character even for an opaque theme colour.
     let tint = Color::from_rgba(bg[0], bg[1], bg[2], SCRIM_ALPHA);
     let veil = container(Space::new().width(Length::Fill).height(Length::Fill))
         .style(move |_: &cosmic::Theme| ContainerStyle {
@@ -348,7 +379,7 @@ fn grid(state: &AppSwitcher) -> Element<'_, Message> {
 
     // In a single-line row that does not fit on screen, draw only the sliding window of
     // cards around the selection so the row can cycle endlessly.
-    let visible: Vec<usize> = m.visible_indices(state.selected, state.entries.len());
+    let visible: Vec<usize> = m.visible_indices(state.selected, state.entries.len(), state.style.row_mode);
     let mut rows: Vec<Element<'_, Message>> = Vec::new();
     for chunk in visible.chunks(m.cols) {
         let mut cells: Vec<Element<'_, Message>> = Vec::with_capacity(m.cols);
@@ -731,6 +762,7 @@ mod tests {
 #[cfg(test)]
 mod animation_tests {
     use super::*;
+    use switcher_config::{ANIM_SPEED_MAX, ANIM_SPEED_MIN, anim_speed_presets};
 
     /// Mirrors `AppSwitcher::select_at` + the `AnimTick` body: focus moves restart the
     /// clock, and the clock drives every card's progress.
@@ -843,13 +875,87 @@ mod animation_tests {
         assert_eq!(m.rows, 1, "a sliding row stays on one line");
         assert!(m.cols < 14, "the row must not try to fit every window at once");
 
-        let first = m.visible_indices(0, 14);
-        let later = m.visible_indices(9, 14);
+        let first = m.visible_indices(0, 14, RowMode::Slide);
+        let later = m.visible_indices(9, 14, RowMode::Slide);
         assert_eq!(first.len(), m.cols);
         assert!(!later.contains(&0), "cards that scrolled off are hidden");
         assert!(later.iter().all(|i| *i < 14));
         // The window is pinned to the end of the list so the last card is reachable.
         assert_eq!(*later.last().unwrap(), 13);
+    }
+
+    #[test]
+    fn carousel_keeps_the_selection_centred_and_wraps_around() {
+        let style = Style { layout: Layout::Row, ..Style::default() };
+        let screen = Screen { width: 2560, height: 1440 };
+        let titles: Vec<String> = (0..14).map(|i| format!("window {i}")).collect();
+        let m = Metrics::fit(&style, screen, 14, &titles);
+        let total = 14;
+
+        // The selected card always sits in the middle of the visible ring.
+        for selected in [0, 5, 13] {
+            let vis = m.visible_indices(selected, total, RowMode::Carousel);
+            assert_eq!(vis.len(), m.cols);
+            let mid = vis.iter().position(|i| *i == selected).expect("selection stays visible");
+            assert_eq!(mid, m.cols / 2, "the selection is centred");
+        }
+
+        // Stepping back from the first window wraps into the tail of the list instead of
+        // stopping at zero.
+        let half = m.cols / 2;
+        let wrapped = m.visible_indices(0, total, RowMode::Carousel);
+        assert_eq!(*wrapped.first().unwrap(), total - half, "the ring wraps backwards");
+        assert!(
+            wrapped.iter().any(|i| *i > total - half),
+            "cards past the first window are visible"
+        );
+
+        // Every index is unique, so nothing is drawn twice.
+        let vis = m.visible_indices(3, total, RowMode::Carousel);
+        let mut sorted = vis.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), vis.len(), "ring indices must be unique");
+
+        // One step forwards always shifts the ring by exactly one card.
+        let a = m.visible_indices(4, total, RowMode::Carousel);
+        let b = m.visible_indices(5, total, RowMode::Carousel);
+        assert_ne!(a, b, "every move shifts the carousel");
+        assert_eq!(a[1], b[0], "the ring advances by one card");
+    }
+
+    #[test]
+    fn carousel_needs_only_one_line_and_any_layout_can_use_slide() {
+        let screen = Screen { width: 2560, height: 1440 };
+        let titles: Vec<String> = (0..6).map(|i| format!("w{i}")).collect();
+        // Grid mode ignores the row mode entirely and shows everything.
+        let grid = Style { layout: Layout::Grid, ..Style::default() };
+        let gm = Metrics::fit(&grid, screen, 6, &titles);
+        assert_eq!(gm.visible_indices(2, 6, RowMode::Carousel), (0..6).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn animation_speed_is_clamped_and_tracks_the_multiplier() {
+        let mut style = Style::default();
+        assert_eq!(style.anim_speed(), 1.0, "1x by default");
+
+        style.anim_speed = 2.5;
+        assert_eq!(style.anim_speed(), 2.5);
+
+        style.anim_speed = 0.1;
+        assert_eq!(style.anim_speed(), ANIM_SPEED_MIN, "below the range clamps up");
+
+        style.anim_speed = 99.0;
+        assert_eq!(style.anim_speed(), ANIM_SPEED_MAX, "above the range clamps down");
+
+        style.anim_speed = f32::NAN;
+        assert_eq!(style.anim_speed(), 1.0, "a broken value falls back to 1x");
+
+        // The presets cover the whole documented range in even steps.
+        let presets = anim_speed_presets();
+        assert_eq!(presets.first(), Some(&ANIM_SPEED_MIN));
+        assert_eq!(presets.last(), Some(&ANIM_SPEED_MAX));
+        assert!(presets.len() >= 9, "0.5 to 5 in half steps");
     }
 
     #[test]

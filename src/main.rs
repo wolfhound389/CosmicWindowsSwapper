@@ -1,4 +1,5 @@
 mod app;
+mod blur;
 mod icons;
 mod shot;
 mod thumbs;

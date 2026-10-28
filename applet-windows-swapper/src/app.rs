@@ -10,7 +10,7 @@ use cosmic::{
 };
 use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::cosmic_config::{ConfigGet, ConfigSet};
-use switcher_config::{Layout, Style, Theme, WorkspaceScope, APP_ID, CONFIG_VERSION};
+use switcher_config::{Layout, RowMode, Style, Theme, WorkspaceScope, APP_ID, CONFIG_VERSION};
 
 const APPLET_ID: &str = "io.github.wolfhound389.CosmicWindowsSwapper.applet";
 /// Binary name of the overlay, also the marker we look for in the COSMIC shortcut map.
@@ -36,6 +36,8 @@ pub enum Message {
     SetTheme(Theme),
     SetScope(WorkspaceScope),
     SetLayout(Layout),
+    SetRowMode(RowMode),
+    SetAnimSpeed(f32),
     SetPreviewSize(u16, u16),
     ToggleTitles(bool),
     ToggleClose(bool),
@@ -356,6 +358,14 @@ impl Application for AppletApp {
                 self.current_style.layout = layout;
                 self.save_style();
             }
+            Message::SetRowMode(mode) => {
+                self.current_style.row_mode = mode;
+                self.save_style();
+            }
+            Message::SetAnimSpeed(speed) => {
+                self.current_style.anim_speed = speed;
+                self.save_style();
+            }
             Message::SetPreviewSize(w, h) => {
                 self.current_style.thumb_width = w;
                 self.current_style.thumb_height = h;
@@ -514,6 +524,60 @@ impl Application for AppletApp {
             })
             .collect();
 
+        // Slide vs. carousel only means something for a single scrolling row.
+        let row_mode_options: Vec<Element<Message>> = RowMode::all()
+            .iter()
+            .map(|m0| {
+                let m0 = *m0;
+                let chosen = m0 == self.current_style.row_mode;
+                let card = container(text(m0.label()).size(12))
+                    .padding([6, 12])
+                    .style(move |_: &cosmic::Theme| ContainerStyle {
+                        border: Border {
+                            radius: 6.0.into(),
+                            width: if chosen { 2.0 } else { 1.0 },
+                            color: if chosen {
+                                Color::from_rgb(0.38, 0.58, 1.0)
+                            } else {
+                                Color::from_rgba(1.0, 1.0, 1.0, 0.15)
+                            },
+                        },
+                        ..Default::default()
+                    });
+                mouse_area(card).on_press(Message::SetRowMode(m0)).into()
+            })
+            .collect();
+
+        let speed_presets = switcher_config::anim_speed_presets();
+        let speed_options: Vec<Element<Message>> = speed_presets
+            .iter()
+            .map(|speed| {
+                let speed = *speed;
+                let chosen = (self.current_style.anim_speed() - speed).abs() < 1e-3;
+                // 0.5 -> "x0.5", 1.0 -> "x1", 2.5 -> "x2.5"
+                let label = if (speed.fract()).abs() < 1e-3 {
+                    format!("x{}", speed as i32)
+                } else {
+                    format!("x{speed}")
+                };
+                let card = container(text(label).size(12))
+                    .padding([6, 10])
+                    .style(move |_: &cosmic::Theme| ContainerStyle {
+                        border: Border {
+                            radius: 6.0.into(),
+                            width: if chosen { 2.0 } else { 1.0 },
+                            color: if chosen {
+                                Color::from_rgb(0.38, 0.58, 1.0)
+                            } else {
+                                Color::from_rgba(1.0, 1.0, 1.0, 0.15)
+                            },
+                        },
+                        ..Default::default()
+                    });
+                mouse_area(card).on_press(Message::SetAnimSpeed(speed)).into()
+            })
+            .collect();
+
         let size_options: Vec<Element<Message>> = Style::preset_sizes()
             .iter()
             .map(|(w, h, label)| {
@@ -563,6 +627,38 @@ impl Application for AppletApp {
             Space::new().height(Length::Fixed(0.0)).into()
         };
 
+        // The row variants only apply to the scrolling row, so they are hidden elsewhere.
+        let row_mode_section: Element<Message> =
+            if self.current_style.layout == Layout::Row {
+                column![
+                    text("Row behaviour").size(14),
+                    row(row_mode_options).spacing(8),
+                    text(
+                        RowMode::all()
+                            .iter()
+                            .find(|m0| **m0 == self.current_style.row_mode)
+                            .map(|m0| m0.description())
+                            .unwrap_or_default()
+                    )
+                    .size(10),
+                ]
+                .spacing(8)
+                .into()
+            } else {
+                Space::new().height(Length::Fixed(0.0)).into()
+            };
+
+        // Ten presets do not fit on one line, so they wrap in rows of five.
+        let mut speed_rows: Vec<Element<Message>> = Vec::new();
+        let mut speed_row: Vec<Element<Message>> = Vec::new();
+        for (i, option) in speed_options.into_iter().enumerate() {
+            speed_row.push(option);
+            if speed_row.len() == 5 || i + 1 == speed_presets.len() {
+                speed_rows.push(row(std::mem::take(&mut speed_row)).spacing(8).into());
+            }
+        }
+        let speed_rows: Element<Message> = column(speed_rows).spacing(8).into();
+
         let mut content = column![
             shortcut_section,
             cosmic::widget::divider::horizontal::default(),
@@ -571,6 +667,7 @@ impl Application for AppletApp {
             cosmic::widget::divider::horizontal::default(),
             text("Layout").size(14),
             row(layout_options).spacing(8),
+            row_mode_section,
             column(size_section).spacing(8),
             row![
                 cosmic::widget::checkbox(self.current_style.show_titles)
@@ -580,6 +677,10 @@ impl Application for AppletApp {
             .spacing(8)
             .align_y(Alignment::Center),
             close_row,
+            cosmic::widget::divider::horizontal::default(),
+            text("Animation speed").size(14),
+            speed_rows,
+
             cosmic::widget::divider::horizontal::default(),
             text("Switch scope").size(14),
             row(scope_options).spacing(8),

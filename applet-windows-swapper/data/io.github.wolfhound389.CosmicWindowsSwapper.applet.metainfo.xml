@@ -44,6 +44,13 @@
     <!-- The newest entry here is the version the COSMIC Store displays. Keep it in sync
          with [workspace.package] version in Cargo.toml and the git tag; the release
          workflow refuses to publish when they disagree. -->
+    <release version="0.1.7" date="2026-10-28">
+      <description>
+        <p>The background behind the switcher is now genuinely blurred by the compositor, with a light dim on top, so the overlay reads clearly against busy wallpapers.</p>
+        <p>Adds an animation speed setting from x0.5 to x5, and the bounce replays on every focus move instead of only once.</p>
+        <p>The row layout gains a carousel mode where each focus change rotates the row and drops the leftmost window off screen.</p>
+      </description>
+    </release>
     <release version="0.1.6" date="2026-10-28">
       <description>
         <p>New Windows/KDE-style layout: Super+Tab now shows a grid of live window previews with titles. The previous icon strip is still available as the Icons layout.</p>

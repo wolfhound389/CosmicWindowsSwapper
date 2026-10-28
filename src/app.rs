@@ -183,6 +183,12 @@ impl Application for AppSwitcher {
             ..Default::default()
         });
 
+        // Blur what is behind the overlay so the desktop reads as frosted glass.
+        let layer_task = Task::batch([
+            layer_task,
+            crate::blur::blur_task::<cosmic::Action<Message>>(surface_id),
+        ]);
+
         let app = AppSwitcher {
             core,
             thumbs: vec![None; n],
@@ -262,8 +268,11 @@ impl Application for AppSwitcher {
                 self.last_tick = Instant::now();
                 // The bounce is driven by a clock that restarts on each focus change, so
                 // the easing plays from the beginning every time Tab is pressed.
+                // Scale elapsed time by the user's speed setting, so x0.5 plays at half
+                // speed and x5 five times faster while the curve itself stays identical.
+                let speed = self.style.anim_speed();
                 if let Some(age) = self.bounce_age.as_mut() {
-                    *age += dt;
+                    *age += dt * speed;
                 }
                 let age = self.bounce_age.unwrap_or(f32::INFINITY);
                 self.hover.resize(n, 0.0);

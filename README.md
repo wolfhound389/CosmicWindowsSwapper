@@ -106,12 +106,21 @@ Three layouts ship, all fully themable:
 
 - **Grid** (default) — the Windows/KDE-style block of live window thumbnails with titles, arranged roughly square on screen.
 - **Single line** — the same previews on one horizontal line. When there are more windows than fit across the screen it becomes a sliding window: holding the switcher key and pressing Tab scrolls the row, hiding the cards that move off the left edge and revealing the next ones, and the cycle wraps around endlessly until you pick a window or let go of the hotkey.
+  The row has two modes, picked under **Row behaviour** in the applet:
+  - **Slide** — the window scrolls only once the selection reaches the right edge.
+  - **Carousel** — the selection stays centred and every focus change shifts the whole row by one card, so the leftmost window slides off screen and a new one enters from the right. Motion is constant and easy to follow whichever card you are on.
 - **Icons** — the original macOS-style horizontal strip of app icons.
 
 The overlay is always centred on the screen. Every time focus moves to another window
 the new card springs past its resting size and settles back — a smooth bounce — while the
 card losing focus glides back down, so the hand-off between two cards is continuous. The
-selected card finally rests 5% larger than its neighbours.
+bounce replays on every focus move, not just the first. The selected card finally rests 5%
+larger than its neighbours.
+
+Everything outside the cards is a real frosted-glass backdrop: the compositor blurs the
+desktop behind the overlay (`ext_background_effect_manager_v1`) and the switcher lays a
+light dim over it, so the cards stay legible over a busy wallpaper while never covering
+the desktop completely. Your theme's background colour supplies the tint.
 
 Long window titles wrap onto up to three lines instead of being clipped, and every card is
 sized to the tallest title in the current set so all previews stay exactly the same size.
@@ -124,12 +133,14 @@ radius, selection ring, column count, icon visibility — lives in the `style` s
 the config file:
 
 ```ron
-style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0,show_titles:true,show_icons:true,radius:10.0,border:2.5,show_close:true),
+style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0,row_mode:Slide,anim_speed:1.0,show_titles:true,show_icons:true,radius:10.0,border:2.5,show_close:true),
 ```
 
 Set `columns` to a number between 1 and 5 to pin the grid width; `0` picks it from the
 window count (and `layout: Row` keeps everything on a single line, scrolling when the
-windows no longer fit). Set `show_close: false` to hide the close buttons.
+windows no longer fit). `row_mode` is `Slide` or `Carousel`, and `anim_speed` scales the
+bounce anywhere from `0.5` to `5.0` (values outside that range are clamped). Set
+`show_close: false` to hide the close buttons.
 
 ---
 
@@ -141,6 +152,8 @@ Add the **Windows Swapper Settings** applet to your COSMIC panel for quick acces
 - **Super+Tab shortcut** toggle — enable or disable without touching the terminal
 - **Theme picker** — Dark, Light, Frosted, or Midnight
 - **Layout** — preview grid, single line, or icon strip, preview size, titles, close buttons
+- **Row behaviour** — Slide or Carousel, shown for the single-line layout
+- **Animation speed** — x0.5 to x5 in half steps
 
 ## Enable / Disable
 

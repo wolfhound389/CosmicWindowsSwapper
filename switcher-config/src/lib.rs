@@ -52,6 +52,40 @@ pub enum Layout {
     Strip,
 }
 
+/// How the single-line (`Layout::Row`) representation behaves when the windows do not
+/// all fit on screen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RowMode {
+    /// Keep the selected card visible and slide the row along, hiding the cards that
+    /// have scrolled past the left edge. The row stays still while every card fits.
+    #[default]
+    Slide,
+    /// A carousel: the leftmost card always leaves the screen and the newly selected one
+    /// enters from the right, so there is continuous motion on every focus change.
+    Carousel,
+}
+
+impl RowMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            RowMode::Slide    => "Slide",
+            RowMode::Carousel => "Carousel",
+        }
+    }
+
+    /// One-line description used as a tooltip in the settings applet.
+    pub fn description(&self) -> &'static str {
+        match self {
+            RowMode::Slide    => "Slide the row only when the selection leaves the screen",
+            RowMode::Carousel => "Every move pushes the leftmost window off the screen",
+        }
+    }
+
+    pub fn all() -> [RowMode; 2] {
+        [RowMode::Slide, RowMode::Carousel]
+    }
+}
+
 impl Layout {
     pub fn label(&self) -> &'static str {
         match self {
@@ -106,6 +140,37 @@ pub struct Style {
     pub border:       f32,
     /// Draw a small "close window" button on every preview (Grid and Row layouts).
     pub show_close:   bool,
+    /// How the single-line layout behaves (Row only).
+    pub row_mode:     RowMode,
+    /// Animation speed multiplier: 0.5 is half speed, 5.0 five times faster.
+    pub anim_speed:   f32,
+}
+
+/// Slowest animation speed the settings applet offers.
+pub const ANIM_SPEED_MIN: f32 = 0.5;
+/// Fastest animation speed the settings applet offers.
+pub const ANIM_SPEED_MAX: f32 = 5.0;
+/// Step between the animation speed presets.
+pub const ANIM_SPEED_STEP: f32 = 0.5;
+
+/// Speed presets shown in the settings applet: x0.5, x1.0, ... x5.0.
+pub fn anim_speed_presets() -> Vec<f32> {
+    let count = ((ANIM_SPEED_MAX - ANIM_SPEED_MIN) / ANIM_SPEED_STEP).round() as usize;
+    (0..=count)
+        .map(|i| ANIM_SPEED_MIN + i as f32 * ANIM_SPEED_STEP)
+        .collect()
+}
+
+impl Style {
+    /// Animation speed multiplier, clamped to the supported range so a hand-edited
+    /// config file can never stall or teleport the animation.
+    pub fn anim_speed(&self) -> f32 {
+        if self.anim_speed.is_finite() {
+            self.anim_speed.clamp(ANIM_SPEED_MIN, ANIM_SPEED_MAX)
+        } else {
+            1.0
+        }
+    }
 }
 
 impl Default for Style {
@@ -122,6 +187,8 @@ impl Default for Style {
             radius:       10.0,
             border:       2.5,
             show_close:   true,
+            row_mode:     RowMode::default(),
+            anim_speed:   1.0,
         }
     }
 }
