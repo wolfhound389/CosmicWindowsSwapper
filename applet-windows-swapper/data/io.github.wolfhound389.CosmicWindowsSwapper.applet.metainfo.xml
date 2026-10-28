@@ -44,6 +44,13 @@
     <!-- The newest entry here is the version the COSMIC Store displays. Keep it in sync
          with [workspace.package] version in Cargo.toml and the git tag; the release
          workflow refuses to publish when they disagree. -->
+    <release version="0.1.8" date="2026-10-28">
+      <description>
+        <p>The animation is now chosen from a dropdown in the applet: zoom, fade, slide, zoom with fade, or off. Turning it off makes the switcher respond instantly instead of waiting for a transition.</p>
+        <p>Super+Q (or Alt+Q) closes the highlighted window and leaves the switcher open, so several windows can be closed in a row.</p>
+        <p>A new switch in the applet turns the overlay off completely — the hotkey becomes a no-op rather than opening an empty switcher.</p>
+      </description>
+    </release>
     <release version="0.1.7" date="2026-10-28">
       <description>
         <p>The background behind the switcher is now genuinely blurred by the compositor, with a light dim on top, so the overlay reads clearly against busy wallpapers.</p>

@@ -1,6 +1,6 @@
 use cosmic::{
     iced::{
-        Alignment, Background, Border, Color, ContentFit, Length, Shadow, Vector,
+        Alignment, Background, Border, Color, ContentFit, Length, Padding, Shadow, Vector,
         widget::container::Style as ContainerStyle,
         widget::text::Wrapping,
     },
@@ -8,7 +8,7 @@ use cosmic::{
     widget::icon,
     Element,
 };
-use switcher_config::{Layout, RowMode, Style};
+use switcher_config::{AnimStyle, Layout, RowMode, Style};
 
 use crate::app::{AppSwitcher, Message};
 use crate::icons::icon_name_for;
@@ -116,6 +116,75 @@ impl Animation {
         let t = (age / Self::DURATION).clamp(0.0, 1.0);
         // Fast outset, long settle: 1 - (1-t)^3 reaches ~0.7 by the half-way mark.
         1.0 - (1.0 - t).powi(3)
+    }
+}
+
+/// Visual state of one card for a given animation style and progress value.
+///
+/// The three effects are kept independent so a style can enable any combination of
+/// them; `Slide` uses `shift` alone, `Fade` uses `opacity` alone, and `ZoomFade` layers
+/// both size and opacity. Everything is centre-anchored, so a scaled card grows outwards
+/// from its middle instead of pushing its neighbours around.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CardFx {
+    /// Scale factor about the card centre, `1.0` when the style does not scale.
+    pub scale:   f32,
+    /// Opacity in `0.0..=1.0`, `1.0` when the style does not fade.
+    pub opacity: f32,
+    /// Horizontal offset in logical pixels, `0.0` when the style does not slide.
+    pub shift:   f32,
+}
+
+impl CardFx {
+    /// No effect at all — used by `AnimStyle::Off` and by every unselected card in a
+    /// style that only decorates the selection.
+    pub const NONE: CardFx = CardFx { scale: 1.0, opacity: 1.0, shift: 0.0 };
+}
+
+impl Animation {
+    /// Opacity the unselected cards fade down to in the fading styles. Keeping it above
+    /// ~0.5 means the neighbours stay legible while the selection clearly stands out.
+    pub const DIM: f32 = 0.55;
+    /// Opacity the incoming card starts from, so the fade has somewhere to travel from.
+    pub const FADE_FROM: f32 = 0.35;
+    /// Distance a card travels sideways in `AnimStyle::Slide`, in logical pixels.
+    pub const SLIDE_PX: f32 = 26.0;
+
+    /// Effect for the card at `progress` (0 = fully deselected, 1 = fully selected).
+    pub fn fx(style: AnimStyle, progress: f32) -> CardFx {
+        let p = if progress.is_finite() { progress.clamp(0.0, 1.0) } else { 0.0 };
+        if !style.is_on() {
+            return CardFx::NONE;
+        }
+        // `scale` already carries the bounce/overshoot curve, so styles that grow reuse
+        // it unchanged and only add their own extras.
+        let scale = if style.scales() { Self::scale(p) } else { 1.0 };
+        let opacity = if style.fades() {
+            // Blend from the dimmed resting look to fully opaque as the card is selected.
+            Self::DIM + (1.0 - Self::DIM) * p
+        } else {
+            1.0
+        };
+        let shift = if style.shifts() {
+            // Selected card sits centred; the others are pushed aside. The offset is
+            // signed by the direction of travel so the motion reads as a slide rather
+            // than a jump.
+            -(1.0 - p) * Self::SLIDE_PX
+        } else {
+            0.0
+        };
+        CardFx { scale, opacity, shift }
+    }
+
+    /// Opacity for the incoming card during the `Fade` style, which has no size change to
+    /// carry the motion. Unlike [`Self::fx`] this starts nearly transparent and reaches
+    /// full opacity exactly at the end of the animation.
+    pub fn fade_in(age: f32) -> f32 {
+        if !age.is_finite() {
+            return 1.0;
+        }
+        let t = (age / Self::DURATION).clamp(0.0, 1.0);
+        Self::FADE_FROM + (1.0 - Self::FADE_FROM) * (1.0 - (1.0 - t).powi(3))
     }
 }
 
@@ -339,14 +408,6 @@ pub fn view(state: &AppSwitcher) -> Element<'_, Message> {
 /// Diameter of the material-style close button drawn on each preview.
 const CLOSE_D: f32 = 22.0;
 
-/// Default opacity of the frosted-glass scrim drawn over everything outside the switcher.
-///
-/// The blur itself comes from the compositor (`ext_background_effect_manager_v1`), so
-/// this sheet only has to take the brightness down a notch. Keeping it light lets the
-/// blurred shapes stay readable as frosted glass instead of collapsing into flat grey.
-/// The user can change it with the blur strength setting; see [`Style::blur_strength`].
-pub const SCRIM_ALPHA: f32 = 0.20;
-
 /// Full-screen frosted backdrop behind the switcher.
 ///
 /// Everything on screen that is not a preview card is dimmed by a translucent sheet in
@@ -449,9 +510,11 @@ fn card<'a>(
     let icon_name = icon_name_for(&entry.app_id);
 
     // Every card animates independently: the one gaining focus bounces up while the one
-    // losing focus glides back down.
+    // losing focus glides back down. The style decides which effects take part, so an
+    // `Off` style yields frozen cards and a `Fade` style keeps every size constant.
     let progress = state.hover.get(index).copied().unwrap_or(0.0);
-    let scale    = Animation::scale(progress);
+    let fx       = Animation::fx(state.style.anim_style(), progress);
+    let scale    = fx.scale;
     let (card_w, card_h) = m.card_size_for(progress);
 
     // Everything inside the card is scaled by the same factor, which is what makes the
@@ -517,6 +580,16 @@ fn card<'a>(
 
     let inner = column![thumb, title].spacing((4.0 * scale).round());
 
+    // iced in this tree has no generic opacity widget, so the fade is applied to the
+    // card's own colours. Scaling every alpha by `fx.opacity` fades the body, border and
+    // accents together; the preview thumbnail keeps its own opacity because it is a
+    // texture, but the dimming still reads correctly at these values.
+    let a = fx.opacity.clamp(0.0, 1.0);
+    let with_alpha = |c: Color| Color::from_rgba(c.r, c.g, c.b, c.a * a);
+    let card_bg = with_alpha(card_bg);
+    let sel_bg = with_alpha(sel_bg);
+    let accent = with_alpha(accent);
+
     let pad = (m.card_pad as f32 * scale).round();
     let cell = container(inner)
         .width(Length::Fixed(card_w))
@@ -530,7 +603,7 @@ fn card<'a>(
                 color: if selected {
                     accent
                 } else {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.06)
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.06 * a)
                 },
             },
             ..Default::default()
@@ -543,7 +616,7 @@ fn card<'a>(
         .height(Length::Fixed(card_h))
         .into();
 
-    let slotted: Element<'a, Message> = if state.style.show_close {
+    let slotted_raw: Element<'a, Message> = if state.style.show_close {
         let inset = (pad + radius * 0.35).round();
         let btn = close_button(index, scale, state.hovered == Some(index));
         cosmic::iced::widget::stack![
@@ -558,6 +631,22 @@ fn card<'a>(
         .into()
     } else {
         body
+    };
+
+    // Sliding styles move the card within a fixed-size cell. iced has no translate
+    // transform, so the card is padded on the leading side and its width shrinks by the
+    // same amount: the box keeps its footprint (the row never reflows) while the visual
+    // content sits `fx.shift` pixels away from where it would otherwise be.
+    let slotted: Element<'a, Message> = if fx.shift.abs() >= 0.5 {
+        let d = fx.shift.abs();
+        let (left, right) = if fx.shift > 0.0 { (d, 0.0) } else { (0.0, d) };
+        container(slotted_raw)
+            .width(Length::Fixed(card_w))
+            .height(Length::Fixed(card_h))
+            .padding(Padding { left, top: 0.0, right, bottom: 0.0 })
+            .into()
+    } else {
+        slotted_raw
     };
 
     mouse_area(slotted)
@@ -971,5 +1060,81 @@ mod animation_tests {
         let b = Metrics::fit(&style, screen, 2, &tall);
         assert!(b.title_h > a.title_h, "a long title must reserve more lines");
         assert!(b.card_h == b.thumb_h + 2 * b.card_pad + b.title_h);
+    }
+}
+
+#[cfg(test)]
+mod anim_style_tests {
+    use super::*;
+
+    /// The whole point of `Off`: the frame right after a selection change already shows
+    /// the final picture, so the user never waits for a tween.
+    #[test]
+    fn off_style_has_no_effect_at_all() {
+        for p in [0.0f32, 0.5, 1.0] {
+            let fx = Animation::fx(AnimStyle::Off, p);
+            assert_eq!(fx, CardFx::NONE, "Off must not scale, fade or shift at p={p}");
+        }
+    }
+
+    /// `Fade` must leave geometry alone, otherwise it would reflow the row on every press.
+    #[test]
+    fn fade_style_never_scales_or_shifts() {
+        for p in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+            let fx = Animation::fx(AnimStyle::Fade, p);
+            assert!((fx.scale - 1.0).abs() < 1e-6, "fade changed the scale at p={p}");
+            assert_eq!(fx.shift, 0.0, "fade changed the offset at p={p}");
+        }
+    }
+
+    /// Every animated style ends exactly at rest, so no card is left mid-transition.
+    #[test]
+    fn every_enabled_style_settles_at_rest() {
+        for style in AnimStyle::all().into_iter().filter(|s| s.is_on()) {
+            let fx = Animation::fx(style, 1.0);
+            assert!((fx.opacity - 1.0).abs() < 1e-6, "{style:?} did not reach full opacity");
+            assert_eq!(fx.shift, 0.0, "{style:?} did not return to its resting offset");
+            if style.scales() {
+                assert!((fx.scale - Animation::scale(1.0)).abs() < 1e-6);
+            } else {
+                assert!((fx.scale - 1.0).abs() < 1e-6);
+            }
+        }
+    }
+
+    /// A style that fades must actually be partially transparent somewhere in the middle,
+    /// or the setting would be a no-op.
+    #[test]
+    fn fading_styles_are_transparent_mid_transition() {
+        for style in AnimStyle::all().into_iter().filter(|s| s.fades()) {
+            let mid = Animation::fx(style, 0.0).opacity;
+            assert!(mid < 0.999, "{style:?} reported opacity {mid} at the start");
+            assert!(mid > 0.0, "{style:?} starts fully invisible, too harsh");
+        }
+    }
+
+    /// Sliding styles must move, and only the sliding style may do so.
+    #[test]
+    fn only_slide_style_shifts_cards() {
+        assert!(Animation::fx(AnimStyle::Slide, 0.0).shift.abs() > 1.0);
+        for style in AnimStyle::all().into_iter().filter(|s| !s.shifts()) {
+            assert_eq!(Animation::fx(style, 0.0).shift, 0.0, "{style:?} shifted a card");
+        }
+    }
+
+    /// `fade_in` drives the incoming card from dim to opaque and must reach 1.0.
+    #[test]
+    fn fade_in_starts_dim_and_ends_opaque() {
+        let start = Animation::fade_in(0.0);
+        assert!(start < 0.5, "incoming card starts at {start}, too bright to read as a fade");
+        assert!((Animation::fade_in(Animation::DURATION) - 1.0).abs() < 1e-6);
+        assert!((Animation::fade_in(f32::INFINITY) - 1.0).abs() < 1e-6);
+    }
+
+    /// Non-finite progress must not produce NaN colours or sizes.
+    #[test]
+    fn non_finite_progress_falls_back_to_the_resting_look() {
+        let fx = Animation::fx(AnimStyle::Fade, f32::NAN);
+        assert!(fx.opacity.is_finite() && fx.scale.is_finite() && fx.shift.is_finite());
     }
 }

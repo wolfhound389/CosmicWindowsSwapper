@@ -970,7 +970,7 @@ dependencies = [
 
 [[package]]
 name = "cosmic-applet-windows-swapper"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "libcosmic",
  "ron",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "cosmic-windows-swapper"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -4760,8 +4760,9 @@ dependencies = [
 
 [[package]]
 name = "switcher-config"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
+ "ron",
  "serde",
 ]
 

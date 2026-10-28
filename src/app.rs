@@ -51,6 +51,9 @@ pub struct AppSwitcher {
     /// Card index the current bounce belongs to, so the animation can be restarted even
     /// when the same card is selected twice in a row (e.g. wrapping around).
     pub bounce_from: usize,
+    /// Set right after Super/Alt+Q so the following modifier release does not commit the
+    /// switch (see the `ModifiersChanged` arm).
+    pub swallow_release: bool,
     /// Timestamp of the previous animation tick (for frame-rate independent easing).
     pub last_tick: Instant,
     /// Keys replayed so far from `COSMIC_SWITCHER_TEST_KEYS`.
@@ -68,6 +71,8 @@ pub enum Message {
     Activate,
     /// Close the window at this index without switching to it.
     CloseIndex(usize),
+    /// Close the highlighted window but keep the switcher open (Super/Alt+Q).
+    CloseSelection,
     HoverCard(usize, bool),
     AnimTick,
     /// Replay the next entry of `COSMIC_SWITCHER_TEST_KEYS` (test hook).
@@ -208,6 +213,7 @@ impl Application for AppSwitcher {
             hover: Vec::new(),
             bounce_age: None,
             bounce_from: usize::MAX,
+            swallow_release: false,
             last_tick: Instant::now(),
             injected: Vec::new(),
             hovered: None,
@@ -255,6 +261,8 @@ impl Application for AppSwitcher {
                         "Settle"     => Message::AnimTick,
                         "Activate"   => Message::Activate,
                         "Cancel"     => Message::Cancel,
+                        // Super/Alt+Q, exercised end-to-end without a compositor.
+                        "CloseSel"   => Message::CloseSelection,
                         _            => Message::AnimTick,
                     });
                 }
@@ -275,18 +283,61 @@ impl Application for AppSwitcher {
                     *age += dt * speed;
                 }
                 let age = self.bounce_age.unwrap_or(f32::INFINITY);
+                let anim_style = self.style.anim_style();
                 self.hover.resize(n, 0.0);
                 for (i, value) in self.hover.iter_mut().enumerate() {
+                    // With the animation switched off the selection is simply on or off:
+                    // no dwell, no spring, no fade — the frame after the key press is
+                    // already the final picture. This is what makes `Off` instant rather
+                    // than merely fast.
+                    if !anim_style.is_on() {
+                        *value = if i == self.selected { 1.0 } else { 0.0 };
+                        continue;
+                    }
                     // The dwell lets the outgoing card shrink a touch before the incoming
-                    // one springs, which reads as a bounce rather than a cross-fade.
+                    // one springs, which reads as a bounce rather than a cross-fade. Slide
+                    // has no size change to hide behind, so the outgoing card is released
+                    // immediately instead of waiting out the dwell.
                     if i == self.selected {
-                        *value = Animation::rise(age);
+                        *value = if anim_style.fades() && !anim_style.scales() {
+                            Animation::fade_in(age)
+                        } else {
+                            Animation::rise(age)
+                        };
                     } else if i == self.bounce_from {
-                        *value = (Animation::REST_AFTER - age * 1.6).max(0.0);
+                        *value = if anim_style.shifts() {
+                            0.0
+                        } else {
+                            (Animation::REST_AFTER - age * 1.6).max(0.0)
+                        };
                     } else {
                         *value = 0.0;
                     }
                 }
+            }
+            Message::CloseSelection => {
+                if self.finished || self.entries.is_empty() {
+                    return Task::none();
+                }
+                let i = self.selected.min(self.entries.len() - 1);
+                self.cmd_tx.send(Command::Close(self.entries[i].key)).ok();
+                // Drop the card right away so the highlight lands on the next window
+                // instead of pointing at one that is already going away. The window
+                // itself disappears a moment later when the compositor honours the
+                // close, so the switcher keeps running for the next keystroke.
+                self.entries.remove(i);
+                self.thumbs.remove(i);
+                self.bounce_from = usize::MAX;
+                self.swallow_release = true;
+                if self.entries.is_empty() {
+                    // Nothing left to show: leaving an empty overlay on screen would
+                    // look like a crash, so dismiss it.
+                    return self.update(Message::Cancel);
+                }
+                let next = if i >= self.entries.len() { self.entries.len() - 1 } else { i };
+                // `select_at` derives the bounce origin from the *previous* selection, so
+                // it must run before `selected` is overwritten here.
+                self.select_at(next);
             }
             Message::CloseIndex(i) => {
                 if self.finished || i >= n {
@@ -373,6 +424,17 @@ impl Application for AppSwitcher {
                     iced::keyboard::Key::Named(Named::Enter) => {
                         return self.update(Message::Activate);
                     }
+                    // Super+Q / Alt+Q closes the highlighted window without leaving the
+                    // switcher. Q only means "close" while a modifier is held, so a plain
+                    // Q still does nothing and cannot nuke a window by accident.
+                    iced::keyboard::Key::Character(ref c)
+                        if (modifiers.logo() || modifiers.alt())
+                            && c.eq_ignore_ascii_case("q") =>
+                    {
+                        // Close whatever is highlighted and stay put: the overlay is left
+                        // running so the user can close several windows in a row.
+                        return self.update(Message::CloseSelection);
+                    }
                     _ => {}
                 },
                 keyboard::Event::ModifiersChanged(mods) => {
@@ -380,6 +442,14 @@ impl Application for AppSwitcher {
                         || (self.alt_held && !mods.alt());
                     self.super_held = mods.logo();
                     self.alt_held = mods.alt();
+                    // After Super/Alt+Q the modifier is usually released while the finger
+                    // is still on Q. Treating that as "commit" would immediately switch to
+                    // the window the user just asked to close, so the release is swallowed
+                    // once and the switcher keeps running for the next keystroke.
+                    if self.swallow_release {
+                        self.swallow_release = false;
+                        return Task::none();
+                    }
                     if activate {
                         return self.update(Message::Activate);
                     }

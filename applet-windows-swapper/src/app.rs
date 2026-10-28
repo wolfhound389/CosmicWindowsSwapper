@@ -10,7 +10,7 @@ use cosmic::{
 };
 use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::cosmic_config::{ConfigGet, ConfigSet};
-use switcher_config::{Layout, RowMode, Style, Theme, WorkspaceScope, APP_ID, CONFIG_VERSION};
+use switcher_config::{AnimStyle, Layout, RowMode, Style, Theme, WorkspaceScope, APP_ID, CONFIG_VERSION};
 
 const APPLET_ID: &str = "io.github.wolfhound389.CosmicWindowsSwapper.applet";
 /// Binary name of the overlay, also the marker we look for in the COSMIC shortcut map.
@@ -38,6 +38,10 @@ pub enum Message {
     SetLayout(Layout),
     SetRowMode(RowMode),
     SetAnimSpeed(f32),
+    /// A style was picked in the animation dropdown (index into `AnimStyle::all()`).
+    SetAnimStyle(usize),
+    /// Master switch for showing the overlay at all.
+    ToggleEnabled(bool),
     SetBlurStrength(f32),
     SetPreviewSize(u16, u16),
     ToggleTitles(bool),
@@ -368,6 +372,16 @@ impl Application for AppletApp {
                 self.save_style();
             }
 
+            Message::SetAnimStyle(i) => {
+                if let Some(style) = AnimStyle::all().get(i) {
+                    self.current_style.anim_style = *style;
+                    self.save_style();
+                }
+            }
+            Message::ToggleEnabled(enable) => {
+                self.current_style.enabled = enable;
+                self.save_style();
+            }
             Message::SetBlurStrength(strength) => {
                 self.current_style.blur_strength = strength;
                 self.save_style();
@@ -554,36 +568,33 @@ impl Application for AppletApp {
             })
             .collect();
 
-        let speed_presets = switcher_config::anim_speed_presets();
-        let speed_options: Vec<Element<Message>> = speed_presets
+        // Animation style is a dropdown rather than a row of pills: five options with
+        // real names read better in a list, and it leaves room to grow the set without
+        // re-flowing the popup. `Off` is the first entry and is a real "no animation"
+        // mode, not a zero duration.
+        let anim_styles = AnimStyle::all();
+        let anim_labels: Vec<String> = anim_styles
             .iter()
-            .map(|speed| {
-                let speed = *speed;
-                let chosen = (self.current_style.anim_speed() - speed).abs() < 1e-3;
-                // 0.5 -> "x0.5", 1.0 -> "x1", 2.5 -> "x2.5"
-                let label = if (speed.fract()).abs() < 1e-3 {
-                    format!("x{}", speed as i32)
-                } else {
-                    format!("x{speed}")
-                };
-                let card = container(text(label).size(12))
-                    .padding([6, 10])
-                    .style(move |_: &cosmic::Theme| ContainerStyle {
-                        border: Border {
-                            radius: 6.0.into(),
-                            width: if chosen { 2.0 } else { 1.0 },
-                            color: if chosen {
-                                Color::from_rgb(0.38, 0.58, 1.0)
-                            } else {
-                                Color::from_rgba(1.0, 1.0, 1.0, 0.15)
-                            },
-                        },
-                        ..Default::default()
-                    });
-                mouse_area(card).on_press(Message::SetAnimSpeed(speed)).into()
-            })
+            .map(|st| st.label().to_string())
             .collect();
+        let anim_selected = self.current_style.anim_style().index();
+        let anim_dropdown: Element<Message> = cosmic::widget::dropdown(
+            anim_labels,
+            Some(anim_selected),
+            Message::SetAnimStyle,
+        )
+        .width(Length::Fill)
+        .into();
+        let anim_hint = anim_styles
+            .get(anim_selected)
+            .map(|st| st.description())
+            .unwrap_or_default();
 
+        // Speed only means something while an animation actually plays, so the row is
+        // greyed out and explained when the style is Off.
+        let anim_on = self.current_style.anim_style().is_on();
+
+        let speed_presets = switcher_config::anim_speed_presets();
         let blur_presets = switcher_config::blur_presets();
         let blur_count = blur_presets.len();
         let blur_options: Vec<Element<Message>> = blur_presets
@@ -679,16 +690,54 @@ impl Application for AppletApp {
                 Space::new().height(Length::Fixed(0.0)).into()
             };
 
-        // Ten presets do not fit on one line, so they wrap in rows of five.
-        let mut speed_rows: Vec<Element<Message>> = Vec::new();
-        let mut speed_row: Vec<Element<Message>> = Vec::new();
-        for (i, option) in speed_options.into_iter().enumerate() {
-            speed_row.push(option);
-            if speed_row.len() == 5 || i + 1 == speed_presets.len() {
-                speed_rows.push(row(std::mem::take(&mut speed_row)).spacing(8).into());
+        let speed_options: Vec<Element<Message>> = speed_presets
+            .iter()
+            .map(|speed| {
+                let speed = *speed;
+                let chosen = (self.current_style.anim_speed() - speed).abs() < 1e-3;
+                let card = container(text(format!("{:.1}×", speed)).size(12))
+                    .padding([6, 10])
+                    .style(move |_: &cosmic::Theme| ContainerStyle {
+                        border: Border {
+                            radius: 6.0.into(),
+                            width: if chosen { 2.0 } else { 1.0 },
+                            color: if chosen {
+                                Color::from_rgb(0.38, 0.58, 1.0)
+                            } else {
+                                Color::from_rgba(1.0, 1.0, 1.0, 0.15)
+                            },
+                        },
+                        ..Default::default()
+                    });
+                mouse_area(card).on_press(Message::SetAnimSpeed(speed)).into()
+            })
+            .collect();
+
+        let speed_section: Element<Message> = if anim_on {
+            // Ten presets do not fit on one line, so they wrap in rows of five.
+            let mut speed_rows: Vec<Element<Message>> = Vec::new();
+            let mut speed_row: Vec<Element<Message>> = Vec::new();
+            for (i, option) in speed_options.into_iter().enumerate() {
+                speed_row.push(option);
+                if speed_row.len() == 5 || i + 1 == speed_presets.len() {
+                    speed_rows.push(row(std::mem::take(&mut speed_row)).spacing(8).into());
+                }
             }
-        }
-        let speed_rows: Element<Message> = column(speed_rows).spacing(8).into();
+            column![
+                text("Speed").size(14),
+                column(speed_rows).spacing(8),
+            ]
+            .spacing(8)
+            .into()
+        } else {
+            // Nothing to speed up: say so instead of offering dead pills.
+            column![
+                text("Speed").size(14),
+                text("Not used — animation is off").size(10),
+            ]
+            .spacing(8)
+            .into()
+        };
 
         // Eleven blur presets wrap in rows of six.
         let mut blur_rows: Vec<Element<Message>> = Vec::new();
@@ -701,7 +750,26 @@ impl Application for AppletApp {
         }
         let blur_rows: Element<Message> = column(blur_rows).spacing(8).into();
 
+        // Master switch first: everything below it is meaningless while the overlay is
+        // switched off, so it sits at the top of the popup where it can be found.
+        let enabled_row: Element<Message> = row![
+            cosmic::widget::checkbox(self.current_style.enabled())
+                .on_toggle(Message::ToggleEnabled),
+            text("Show window switcher").size(12),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into();
+        let enabled_hint: Element<Message> = if self.current_style.enabled() {
+            Space::new().height(Length::Fixed(0.0)).into()
+        } else {
+            text("The hotkey does nothing while this is off").size(10).into()
+        };
+
         let mut content = column![
+            enabled_row,
+            enabled_hint,
+            cosmic::widget::divider::horizontal::default(),
             shortcut_section,
             cosmic::widget::divider::horizontal::default(),
             text("Theme").size(14),
@@ -720,8 +788,10 @@ impl Application for AppletApp {
             .align_y(Alignment::Center),
             close_row,
             cosmic::widget::divider::horizontal::default(),
-            text("Animation speed").size(14),
-            speed_rows,
+            text("Animation").size(14),
+            anim_dropdown,
+            text(anim_hint).size(10),
+            speed_section,
             text("Blur strength").size(14),
             blur_rows,
 
@@ -777,7 +847,9 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("theme: Dark"));
         assert!(text.contains("workspace_scope: AllWorkspaces"));
-        assert_eq!(text.matches("style:").count(), 1, "{text}");
+        // Anchored to the line start so fields whose names merely end in "style" (such as
+        // `anim_style`) do not count as a second key.
+        assert_eq!(text.matches("\n    style:").count(), 1, "{text}");
         // The whole file must still parse as a RON map.
         let parsed = ron::from_str::<ron::Value>(&text).expect("file parses");
         assert!(matches!(parsed, ron::Value::Map(_)));

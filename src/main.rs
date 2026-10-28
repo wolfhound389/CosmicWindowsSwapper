@@ -83,6 +83,14 @@ fn main() -> Result<()> {
 
     let (theme, scope, style) = load_config();
 
+    // The applet can switch the switcher off outright. Bailing here rather than hiding the
+    // layer surface means no overlay is ever mapped: the hotkey becomes a no-op instead of
+    // flashing a window on screen for a frame.
+    if !style.enabled() {
+        log::info!("switcher is disabled in the panel applet; not showing the overlay");
+        return Ok(());
+    }
+
     let switcher = wayland::spawn(scope, preview_resolution(&style), style.radius * 2.0)?;
 
     if switcher.entries.is_empty() {

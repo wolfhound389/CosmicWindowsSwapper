@@ -99,6 +99,7 @@ make uninstall
 | Escape | Cancel — return to original window |
 | Click a preview | Select and activate it |
 | Click the ✕ button | Close that window without switching to it |
+| Super+Q / Alt+Q | Close the highlighted window and keep the switcher open |
 
 ### Layouts
 
@@ -112,10 +113,28 @@ Three layouts ship, all fully themable:
 - **Icons** — the original macOS-style horizontal strip of app icons.
 
 The overlay is always centred on the screen. Every time focus moves to another window
-the new card springs past its resting size and settles back — a smooth bounce — while the
-card losing focus glides back down, so the hand-off between two cards is continuous. The
-bounce replays on every focus move, not just the first. The selected card finally rests 5%
-larger than its neighbours.
+the new card animates in, so the hand-off between two cards is continuous. The effect
+replays on every focus move, not just the first.
+
+### Animation
+
+Pick the effect under **Animation** in the applet. The choice is a dropdown because the
+names need room, and **Off** is a real entry rather than a zero-length duration — nothing
+moves, the newly selected card appears instantly, and pressing Enter or Super+Q after a
+single Tab acts immediately instead of waiting out a tween.
+
+- **Zoom** (default) — the incoming card springs past its resting size and settles back,
+  while the card losing focus glides down. This is the Windows Alt+Tab / macOS ⌘+Tab
+  behaviour, and it stays the default so upgrading changes nothing.
+- **Fade** — the incoming card fades up from 55% opacity. No geometry changes, so the row
+  cannot reflow. Familiar from GNOME and KDE.
+- **Slide** — the card enters from 26 px to its left. Most at home in the single-line
+  layout; KDE's slideshow and macOS Stage Manager use similar motion.
+- **Zoom + fade** — both at once, the softened combination COSMIC and Android use.
+- **Off** — no animation at all.
+
+**Speed** scales the duration from x0.5 to x5 in half steps. It is hidden while the
+animation is Off, because there is nothing left to speed up.
 
 Everything outside the cards is a real frosted-glass backdrop: the compositor blurs the
 desktop behind the overlay (`ext_background_effect_manager_v1`) and the switcher lays a
@@ -135,14 +154,20 @@ radius, selection ring, column count, icon visibility — lives in the `style` s
 the config file:
 
 ```ron
-style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0,row_mode:Slide,anim_speed:1.0,blur_strength:0.20,show_titles:true,show_icons:true,radius:10.0,border:2.5,show_close:true),
+style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0,row_mode:Slide,anim_speed:1.0,anim_style:Zoom,blur_strength:0.20,enabled:true,show_titles:true,show_icons:true,radius:10.0,border:2.5,show_close:true),
 ```
 
 Set `columns` to a number between 1 and 5 to pin the grid width; `0` picks it from the
 window count (and `layout: Row` keeps everything on a single line, scrolling when the
 windows no longer fit). `row_mode` is `Slide` or `Carousel`, and `anim_speed` scales the
-bounce anywhere from `0.5` to `5.0` (values outside that range are clamped). Set
+animation anywhere from `0.5` to `5.0` (values outside that range are clamped).
+`anim_style` is `Off`, `Zoom`, `Fade`, `Slide` or `ZoomFade`, and `enabled: false` stops
+the switcher from appearing at all while leaving its shortcut in place. Set
 `show_close: false` to hide the close buttons.
+
+Fields missing from a config file fall back to their defaults, so a file written by an
+older release — without `anim_style` or `enabled` — loads with that user's existing layout
+intact.
 
 `blur_strength` is the opacity of the backdrop dim, from `0.0` (blurred desktop, no
 darkening) to `1.0` (opaque). It defaults to `0.20`, which keeps the blurred shapes
@@ -156,7 +181,8 @@ protocol — this knob controls the veil drawn on top of it, not the blur itself
 > **Tip:** After installing, right-click your COSMIC panel → **Edit Panel** → **Add Applet** → search for **Windows Swapper Settings** and add it. This gives you a one-click toggle and theme picker directly in your panel.
 
 Add the **Windows Swapper Settings** applet to your COSMIC panel for quick access to:
-- **Super+Tab shortcut** toggle — enable or disable without touching the terminal
+- **Show window switcher** — turn the overlay off entirely without touching the terminal
+- **Super+Tab shortcut** toggle — unregister the hotkey while keeping the applet
 - **Theme picker** — Dark, Light, Frosted, or Midnight
 - **Layout** — preview grid, single line, or icon strip, preview size, titles, close buttons
 - **Row behaviour** — Slide or Carousel, shown for the single-line layout

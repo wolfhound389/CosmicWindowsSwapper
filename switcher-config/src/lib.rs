@@ -86,6 +86,98 @@ impl RowMode {
     }
 }
 
+/// How the selection moves between cards.
+///
+/// These are the four transitions that every mainstream switcher ships with, plus an
+/// explicit "Off". They are picked because they are the ones users already know:
+///
+/// * `Zoom` — Windows `Alt`+`Tab` and macOS `Cmd`+`Tab`: the selected window grows a
+///   little and its neighbours spring back. This is the historical default here.
+/// * `Fade` — GNOME/KDE task switchers: the new selection fades in solid while the old
+///   one dims out. The calmest option and the cheapest to render.
+/// * `Slide` — KDE `Alt`+`Tab` "cover flow"/slideshow and macOS Stage Manager: the
+///   previews shift sideways so motion follows the arrow keys.
+/// * `Zoom Fade` — the combination used by modern Android and COSMIC window
+///   transitions: scale and opacity move together.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AnimStyle {
+    /// No animation at all: the selection is redrawn instantly on every key press.
+    Off,
+    /// Selected card grows, neighbours shrink (Windows / macOS default).
+    #[default]
+    Zoom,
+    /// Opacity only, no size change (GNOME / KDE).
+    Fade,
+    /// Cards shift sideways, size unchanged (KDE slideshow / Stage Manager).
+    Slide,
+    /// Scale and opacity together (Android / COSMIC transitions).
+    ZoomFade,
+}
+
+impl AnimStyle {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AnimStyle::Off      => "Off",
+            AnimStyle::Zoom     => "Zoom",
+            AnimStyle::Fade     => "Fade",
+            AnimStyle::Slide    => "Slide",
+            AnimStyle::ZoomFade => "Zoom + fade",
+        }
+    }
+
+    /// One-line description shown under the dropdown in the settings applet.
+    pub fn description(&self) -> &'static str {
+        match self {
+            AnimStyle::Off      => "No animation at all — instant response",
+            AnimStyle::Zoom     => "Selected window grows a little (Windows, macOS)",
+            AnimStyle::Fade     => "Selected window fades in, the rest dim (GNOME, KDE)",
+            AnimStyle::Slide    => "Selected window slides sideways (KDE, Stage Manager)",
+            AnimStyle::ZoomFade => "Grows and fades at the same time (Android, COSMIC)",
+        }
+    }
+
+    /// Does this style animate anything? Consulted by the overlay to skip the animation
+    /// clock entirely, which is what makes `Off` genuinely instant instead of a very
+    /// fast animation.
+    pub fn is_on(&self) -> bool {
+        !matches!(self, AnimStyle::Off)
+    }
+
+    /// Does this style change the card size (and therefore the layout)?
+    pub fn scales(&self) -> bool {
+        matches!(self, AnimStyle::Zoom | AnimStyle::ZoomFade)
+    }
+
+    /// Does this style change the card opacity?
+    pub fn fades(&self) -> bool {
+        matches!(self, AnimStyle::Fade | AnimStyle::ZoomFade)
+    }
+
+    /// Does this style move the cards horizontally without changing their size?
+    pub fn shifts(&self) -> bool {
+        matches!(self, AnimStyle::Slide)
+    }
+
+    /// Every style in the order shown by the settings dropdown.
+    pub fn all() -> [AnimStyle; 5] {
+        [
+            AnimStyle::Off,
+            AnimStyle::Zoom,
+            AnimStyle::Fade,
+            AnimStyle::Slide,
+            AnimStyle::ZoomFade,
+        ]
+    }
+
+    /// Index of this style within [`AnimStyle::all`], for the dropdown's selected row.
+    pub fn index(&self) -> usize {
+        AnimStyle::all()
+            .iter()
+            .position(|s| s == self)
+            .unwrap_or(1)
+    }
+}
+
 impl Layout {
     pub fn label(&self) -> &'static str {
         match self {
@@ -144,9 +236,15 @@ pub struct Style {
     pub row_mode:     RowMode,
     /// Animation speed multiplier: 0.5 is half speed, 5.0 five times faster.
     pub anim_speed:   f32,
+    /// Which transition plays when the selection moves between windows.
+    pub anim_style:   AnimStyle,
     /// How strongly the desktop behind the overlay is dimmed, 0.0 (untouched) to
     /// 1.0 (opaque). The compositor's blur is fixed; this is the tint on top of it.
     pub blur_strength: f32,
+    /// Master switch. When false the overlay is never shown at all, whatever key is
+    /// pressed; the panel applet and the shortcut stay in place so it can be turned back
+    /// on without reconfiguring anything.
+    pub enabled:      bool,
 }
 
 /// Slowest animation speed the settings applet offers.
@@ -202,6 +300,19 @@ impl Style {
             1.0
         }
     }
+
+    /// The transition to play on a selection change.
+    ///
+    /// `Off` short-circuits the animation clock in the overlay, so it is a real instant
+    /// switch rather than a zero-duration tween.
+    pub fn anim_style(&self) -> AnimStyle {
+        self.anim_style
+    }
+
+    /// Is the switcher allowed to appear at all?
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
 }
 
 impl Default for Style {
@@ -220,7 +331,9 @@ impl Default for Style {
             show_close:   true,
             row_mode:     RowMode::default(),
             anim_speed:   1.0,
+            anim_style:   AnimStyle::default(),
             blur_strength: 0.20,
+            enabled:      true,
         }
     }
 }
@@ -484,6 +597,8 @@ mod tests {
 
 #[cfg(test)]
 mod old_config_tests {
+    use super::AnimStyle;
+
     #[test]
     fn config_without_new_fields_still_parses() {
         // A config written before row_mode/anim_speed/blur_strength existed.
@@ -494,5 +609,114 @@ mod old_config_tests {
         assert_eq!(s.thumb_width, 220);
         assert_eq!(s.anim_speed(), 1.0);
         assert_eq!(s.blur_strength(), 0.20);
+        // Fields added even later must also default, or an upgrade would silently reset
+        // a user's layout: the miss turns the whole parse into `None` upstream.
+        assert_eq!(s.anim_style(), AnimStyle::Zoom);
+        assert!(s.enabled());
+    }
+
+    /// Byte-for-byte the shape of a real file written by an older release: no
+    /// `anim_style`, no `enabled`. This is the case that upgrades hit in the wild.
+    #[test]
+    fn a_file_from_the_previous_release_loads_with_new_defaults() {
+        let live = "(
+    layout: Row,
+    thumb_width: 300,
+    thumb_height: 170,
+    gap: 14,
+    padding: 16,
+    columns: 0,
+    show_titles: true,
+    show_icons: true,
+    radius: 10.0,
+    border: 2.5,
+    show_close: true,
+    row_mode: Carousel,
+    anim_speed: 2.0,
+    blur_strength: 0.3,
+)";
+        let s: super::Style = ron::from_str(live).expect("previous release's file must load");
+        // The user's own choices survive untouched.
+        assert_eq!((s.thumb_width, s.thumb_height), (300, 170));
+        assert_eq!(s.row_mode, super::RowMode::Carousel);
+        assert_eq!(s.anim_speed(), 2.0);
+        assert_eq!(s.blur_strength(), 0.3);
+        // Only the new fields take defaults.
+        assert_eq!(s.anim_style(), AnimStyle::Zoom);
+        assert!(s.enabled());
+    }
+
+    #[test]
+    fn a_config_carrying_the_new_fields_round_trips() {
+        let mut style = super::Style::default();
+        style.anim_style = AnimStyle::Slide;
+        style.enabled = false;
+        let text = ron::to_string(&style).expect("serialises");
+        let back: super::Style = ron::from_str(&text).expect("parses back");
+        assert_eq!(back.anim_style, AnimStyle::Slide);
+        assert!(!back.enabled());
+    }
+}
+
+#[cfg(test)]
+mod anim_style_tests {
+    use super::*;
+
+    #[test]
+    fn every_style_has_distinct_label_and_description() {
+        let all = AnimStyle::all();
+        for (i, a) in all.iter().enumerate() {
+            assert!(!a.label().is_empty());
+            assert!(!a.description().is_empty());
+            for b in all.iter().skip(i + 1) {
+                assert_ne!(a.label(), b.label(), "duplicate label for {a:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn index_round_trips_through_all() {
+        for (i, style) in AnimStyle::all().into_iter().enumerate() {
+            assert_eq!(style.index(), i);
+            assert_eq!(AnimStyle::all()[style.index()], style);
+        }
+    }
+
+    #[test]
+    fn off_is_the_only_disabled_style() {
+        assert!(!AnimStyle::Off.is_on());
+        for style in AnimStyle::all().into_iter().filter(|s| *s != AnimStyle::Off) {
+            assert!(style.is_on(), "{style:?} should animate");
+        }
+    }
+
+    #[test]
+    fn effect_flags_match_the_advertised_behaviour() {
+        assert!(AnimStyle::Zoom.scales() && !AnimStyle::Zoom.fades());
+        assert!(AnimStyle::Fade.fades() && !AnimStyle::Fade.scales());
+        assert!(AnimStyle::Slide.shifts() && !AnimStyle::Slide.scales());
+        assert!(AnimStyle::ZoomFade.scales() && AnimStyle::ZoomFade.fades());
+    }
+
+    #[test]
+    fn default_style_keeps_the_existing_look() {
+        // Users who upgrade must not see their switcher change appearance.
+        assert_eq!(Style::default().anim_style(), AnimStyle::Zoom);
+        assert_eq!(Style::default().anim_style(), AnimStyle::default());
+    }
+
+    #[test]
+    fn off_still_reports_a_usable_speed() {
+        // The speed slider is hidden when the animation is off, but a stale value in the
+        // file must still clamp instead of producing nonsense.
+        let mut style = Style::default();
+        style.anim_style = AnimStyle::Off;
+        style.anim_speed = 99.0;
+        assert_eq!(style.anim_speed(), ANIM_SPEED_MAX);
+    }
+
+    #[test]
+    fn enabled_defaults_to_true() {
+        assert!(Style::default().enabled());
     }
 }
