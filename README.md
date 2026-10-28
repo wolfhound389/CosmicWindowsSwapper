@@ -120,7 +120,9 @@ larger than its neighbours.
 Everything outside the cards is a real frosted-glass backdrop: the compositor blurs the
 desktop behind the overlay (`ext_background_effect_manager_v1`) and the switcher lays a
 light dim over it, so the cards stay legible over a busy wallpaper while never covering
-the desktop completely. Your theme's background colour supplies the tint.
+the desktop completely. Your theme's background colour supplies the tint, and
+**Blur strength** in the applet sets how heavily that dim sits — 0% leaves the blurred
+desktop untouched, 100% hides it behind an opaque sheet.
 
 Long window titles wrap onto up to three lines instead of being clipped, and every card is
 sized to the tallest title in the current set so all previews stay exactly the same size.
@@ -133,7 +135,7 @@ radius, selection ring, column count, icon visibility — lives in the `style` s
 the config file:
 
 ```ron
-style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0,row_mode:Slide,anim_speed:1.0,show_titles:true,show_icons:true,radius:10.0,border:2.5,show_close:true),
+style: (layout:Grid,thumb_width:300,thumb_height:170,gap:14,padding:16,columns:0,row_mode:Slide,anim_speed:1.0,blur_strength:0.20,show_titles:true,show_icons:true,radius:10.0,border:2.5,show_close:true),
 ```
 
 Set `columns` to a number between 1 and 5 to pin the grid width; `0` picks it from the
@@ -141,6 +143,11 @@ window count (and `layout: Row` keeps everything on a single line, scrolling whe
 windows no longer fit). `row_mode` is `Slide` or `Carousel`, and `anim_speed` scales the
 bounce anywhere from `0.5` to `5.0` (values outside that range are clamped). Set
 `show_close: false` to hide the close buttons.
+
+`blur_strength` is the opacity of the backdrop dim, from `0.0` (blurred desktop, no
+darkening) to `1.0` (opaque). It defaults to `0.20`, which keeps the blurred shapes
+readable as glass instead of flat grey. The compositor's blur radius is fixed by the
+protocol — this knob controls the veil drawn on top of it, not the blur itself.
 
 ---
 
@@ -154,6 +161,7 @@ Add the **Windows Swapper Settings** applet to your COSMIC panel for quick acces
 - **Layout** — preview grid, single line, or icon strip, preview size, titles, close buttons
 - **Row behaviour** — Slide or Carousel, shown for the single-line layout
 - **Animation speed** — x0.5 to x5 in half steps
+- **Blur strength** — 0% to 100% in 10% steps, the dim laid over the blurred backdrop
 
 ## Enable / Disable
 

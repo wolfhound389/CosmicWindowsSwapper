@@ -38,6 +38,7 @@ pub enum Message {
     SetLayout(Layout),
     SetRowMode(RowMode),
     SetAnimSpeed(f32),
+    SetBlurStrength(f32),
     SetPreviewSize(u16, u16),
     ToggleTitles(bool),
     ToggleClose(bool),
@@ -366,6 +367,11 @@ impl Application for AppletApp {
                 self.current_style.anim_speed = speed;
                 self.save_style();
             }
+
+            Message::SetBlurStrength(strength) => {
+                self.current_style.blur_strength = strength;
+                self.save_style();
+            }
             Message::SetPreviewSize(w, h) => {
                 self.current_style.thumb_width = w;
                 self.current_style.thumb_height = h;
@@ -578,6 +584,31 @@ impl Application for AppletApp {
             })
             .collect();
 
+        let blur_presets = switcher_config::blur_presets();
+        let blur_count = blur_presets.len();
+        let blur_options: Vec<Element<Message>> = blur_presets
+            .iter()
+            .map(|strength| {
+                let strength = *strength;
+                let chosen = (self.current_style.blur_strength() - strength).abs() < 1e-3;
+                let card = container(text(format!("{:.0}%", strength * 100.0)).size(12))
+                    .padding([6, 10])
+                    .style(move |_: &cosmic::Theme| ContainerStyle {
+                        border: Border {
+                            radius: 6.0.into(),
+                            width: if chosen { 2.0 } else { 1.0 },
+                            color: if chosen {
+                                Color::from_rgb(0.38, 0.58, 1.0)
+                            } else {
+                                Color::from_rgba(1.0, 1.0, 1.0, 0.15)
+                            },
+                        },
+                        ..Default::default()
+                    });
+                mouse_area(card).on_press(Message::SetBlurStrength(strength)).into()
+            })
+            .collect();
+
         let size_options: Vec<Element<Message>> = Style::preset_sizes()
             .iter()
             .map(|(w, h, label)| {
@@ -659,6 +690,17 @@ impl Application for AppletApp {
         }
         let speed_rows: Element<Message> = column(speed_rows).spacing(8).into();
 
+        // Eleven blur presets wrap in rows of six.
+        let mut blur_rows: Vec<Element<Message>> = Vec::new();
+        let mut blur_row: Vec<Element<Message>> = Vec::new();
+        for (i, option) in blur_options.into_iter().enumerate() {
+            blur_row.push(option);
+            if blur_row.len() == 6 || i + 1 == blur_count {
+                blur_rows.push(row(std::mem::take(&mut blur_row)).spacing(8).into());
+            }
+        }
+        let blur_rows: Element<Message> = column(blur_rows).spacing(8).into();
+
         let mut content = column![
             shortcut_section,
             cosmic::widget::divider::horizontal::default(),
@@ -680,6 +722,8 @@ impl Application for AppletApp {
             cosmic::widget::divider::horizontal::default(),
             text("Animation speed").size(14),
             speed_rows,
+            text("Blur strength").size(14),
+            blur_rows,
 
             cosmic::widget::divider::horizontal::default(),
             text("Switch scope").size(14),

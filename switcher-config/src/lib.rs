@@ -144,6 +144,9 @@ pub struct Style {
     pub row_mode:     RowMode,
     /// Animation speed multiplier: 0.5 is half speed, 5.0 five times faster.
     pub anim_speed:   f32,
+    /// How strongly the desktop behind the overlay is dimmed, 0.0 (untouched) to
+    /// 1.0 (opaque). The compositor's blur is fixed; this is the tint on top of it.
+    pub blur_strength: f32,
 }
 
 /// Slowest animation speed the settings applet offers.
@@ -161,7 +164,35 @@ pub fn anim_speed_presets() -> Vec<f32> {
         .collect()
 }
 
+/// Weakest backdrop dimming the settings applet offers.
+pub const BLUR_MIN: f32 = 0.0;
+/// Strongest backdrop dimming the settings applet offers.
+pub const BLUR_MAX: f32 = 1.0;
+/// Step between the backdrop dimming presets, in whole percent.
+///
+/// Whole-percent steps keep every preset exactly representable as `pct / 100.0`, so the
+/// pill for the default 22% matches the stored value bit for bit.
+pub const BLUR_STEP_PCT: u32 = 10;
+
+/// Backdrop dimming presets shown in the settings applet: 0%, 10%, ... 100%.
+pub fn blur_presets() -> Vec<f32> {
+    (0..=100 / BLUR_STEP_PCT)
+        .map(|i| (i * BLUR_STEP_PCT) as f32 / 100.0)
+        .collect()
+}
+
 impl Style {
+    /// Backdrop dimming, clamped to the supported range. A hand-edited config file
+    /// cannot make the overlay fully transparent or hide the desktop entirely.
+    pub fn blur_strength(&self) -> f32 {
+        if self.blur_strength.is_finite() {
+            self.blur_strength.clamp(BLUR_MIN, BLUR_MAX)
+        } else {
+            // A corrupt value must not wipe the backdrop, so fall back to the default.
+            Style::default().blur_strength
+        }
+    }
+
     /// Animation speed multiplier, clamped to the supported range so a hand-edited
     /// config file can never stall or teleport the animation.
     pub fn anim_speed(&self) -> f32 {
@@ -189,6 +220,7 @@ impl Default for Style {
             show_close:   true,
             row_mode:     RowMode::default(),
             anim_speed:   1.0,
+            blur_strength: 0.20,
         }
     }
 }
@@ -367,6 +399,31 @@ mod tests {
         let s = Style { columns: 2, ..Default::default() };
         assert_eq!(s.columns_for(9), 2);
         assert_eq!(s.columns_for(1), 1);
+    }
+
+    #[test]
+    fn blur_strength_is_clamped() {
+        assert_eq!(Style::default().blur_strength(), 0.20);
+        assert_eq!(Style { blur_strength: -1.0, ..Default::default() }.blur_strength(), BLUR_MIN);
+        assert_eq!(Style { blur_strength: 9.0, ..Default::default() }.blur_strength(), BLUR_MAX);
+        assert_eq!(Style { blur_strength: f32::NAN, ..Default::default() }.blur_strength(), 0.20);
+    }
+
+    #[test]
+    fn blur_presets_span_the_whole_range() {
+        let presets = blur_presets();
+        assert_eq!(presets.first().copied(), Some(BLUR_MIN));
+        assert_eq!(presets.last().copied(), Some(BLUR_MAX));
+        // The default has to be selectable from the applet, otherwise the pill row
+        // would open with nothing highlighted.
+        assert_eq!(presets.len(), 11);
+        assert!(presets.iter().any(|p| (p - Style::default().blur_strength()).abs() < 1e-3));
+    }
+
+    #[test]
+    fn anim_speed_presets_span_the_whole_range() {
+        let presets = anim_speed_presets();
+        assert_eq!(presets, vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]);
     }
 
     fn tmpdir(tag: &str) -> std::path::PathBuf {

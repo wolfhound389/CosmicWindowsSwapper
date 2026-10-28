@@ -49,6 +49,7 @@
         <p>The background behind the switcher is now genuinely blurred by the compositor, with a light dim on top, so the overlay reads clearly against busy wallpapers.</p>
         <p>Adds an animation speed setting from x0.5 to x5, and the bounce replays on every focus move instead of only once.</p>
         <p>The row layout gains a carousel mode where each focus change rotates the row and drops the leftmost window off screen.</p>
+        <p>Blur strength is adjustable from 0% to 100% in the applet, controlling how heavily the blurred backdrop is dimmed.</p>
       </description>
     </release>
     <release version="0.1.6" date="2026-10-28">

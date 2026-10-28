@@ -339,13 +339,13 @@ pub fn view(state: &AppSwitcher) -> Element<'_, Message> {
 /// Diameter of the material-style close button drawn on each preview.
 const CLOSE_D: f32 = 22.0;
 
-/// Opacity of the frosted-glass scrim drawn over everything outside the switcher.
-/// How far the desktop is dimmed behind the switcher.
+/// Default opacity of the frosted-glass scrim drawn over everything outside the switcher.
 ///
 /// The blur itself comes from the compositor (`ext_background_effect_manager_v1`), so
 /// this sheet only has to take the brightness down a notch. Keeping it light lets the
 /// blurred shapes stay readable as frosted glass instead of collapsing into flat grey.
-pub const SCRIM_ALPHA: f32 = 0.22;
+/// The user can change it with the blur strength setting; see [`Style::blur_strength`].
+pub const SCRIM_ALPHA: f32 = 0.20;
 
 /// Full-screen frosted backdrop behind the switcher.
 ///
@@ -353,10 +353,10 @@ pub const SCRIM_ALPHA: f32 = 0.22;
 /// the theme's background tone, on top of the blur the compositor applies to the same
 /// area. Together they read as frosted glass: the desktop is still there, softly
 /// out of focus, while the cards in front stay crisp.
-fn scrim(bg: [f32; 4]) -> Element<'static, Message> {
+fn scrim(bg: [f32; 4], alpha: f32) -> Element<'static, Message> {
     // The tint comes from the theme background but always stays translucent, so the
     // scrim keeps its frosted character even for an opaque theme colour.
-    let tint = Color::from_rgba(bg[0], bg[1], bg[2], SCRIM_ALPHA);
+    let tint = Color::from_rgba(bg[0], bg[1], bg[2], alpha);
     let veil = container(Space::new().width(Length::Fill).height(Length::Fill))
         .style(move |_: &cosmic::Theme| ContainerStyle {
             background: Some(Background::Color(tint)),
@@ -426,7 +426,7 @@ fn grid(state: &AppSwitcher) -> Element<'_, Message> {
         .align_x(Alignment::Center)
         .align_y(Alignment::Center);
     // The scrim sits *under* the cards, so the previews themselves stay untinted.
-    cosmic::iced::widget::stack![scrim(tv.bg), centred].into()
+    cosmic::iced::widget::stack![scrim(tv.bg, state.style.blur_strength()), centred].into()
 }
 
 /// One preview card. The selected card is laid out `Animation::scale(progress)` larger
@@ -712,7 +712,7 @@ fn strip(state: &AppSwitcher) -> Element<'_, Message> {
     let centred = container(strip)
         .center_x(Length::Fill)
         .center_y(Length::Fill);
-    cosmic::iced::widget::stack![scrim(tv.bg), centred].into()
+    cosmic::iced::widget::stack![scrim(tv.bg, state.style.blur_strength()), centred].into()
 }
 
 #[cfg(test)]
