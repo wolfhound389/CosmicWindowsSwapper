@@ -11,7 +11,7 @@ previews and titles (the classic icon strip is still available as a layout optio
 
 <table align="center">
   <tr>
-    <td align="center"><img src="docs/app-switcher.gif" alt="App switcher overlay"/></td>
+    <td align="center"><img src="docs/screenshot-overlay.png" alt="App switcher overlay"/></td>
     <td align="center"><img src="docs/screenshot-applet.png" alt="Panel applet"/></td>
   </tr>
   <tr>
@@ -255,6 +255,21 @@ GitHub Actions will build binaries for x86_64 and aarch64 and publish a release 
 - x86_64 or aarch64 architecture
 
 Building from source additionally requires `libxkbcommon-dev` and Rust.
+
+---
+
+## Credits
+
+This project was inspired by [cosmic-app-switcher](https://github.com/j0rdiun/cosmic-app-switcher),
+a COSMIC app switcher by Jordan, and began as a fork of it. The original macOS CMD+Tab-style
+switcher, the theme presets, the first version of the panel applet and the distribution tooling
+all come from that work, and GPL-3.0 requires that this is said plainly.
+
+Development since the rename to CosmicWindowsSwapper — live window previews, the grid, single-line
+and icon layouts, the carousel, the blurred backdrop, per-card animation and this settings panel —
+happened here.
+
+Thanks are due to that original software and its author.
 
 ---
 
