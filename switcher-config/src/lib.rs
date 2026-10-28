@@ -481,3 +481,18 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod old_config_tests {
+    #[test]
+    fn config_without_new_fields_still_parses() {
+        // A config written before row_mode/anim_speed/blur_strength existed.
+        let old = "(layout: Row, thumb_width: 220, thumb_height: 125, gap: 14, padding: 16, \
+                   columns: 0, show_titles: true, show_icons: true, radius: 10.0, border: 2.5, \
+                   show_close: true)";
+        let s: super::Style = ron::from_str(old).expect("old config must keep parsing");
+        assert_eq!(s.thumb_width, 220);
+        assert_eq!(s.anim_speed(), 1.0);
+        assert_eq!(s.blur_strength(), 0.20);
+    }
+}
