@@ -68,39 +68,28 @@ fn color(c: [f32; 4]) -> Color {
 pub struct Animation;
 
 impl Animation {
-    /// How much bigger the selected preview gets, in percent (5%).
-    pub const GROWTH: f32 = 0.05;
-    /// Extra scale the incoming card springs past its resting size, as a fraction of the
-    /// card size. Kept small so the effect reads as a bounce, not a zoom.
-    pub const BOUNCE: f32 = 0.022;
     /// Error below which the animation is considered finished (stops the 16 ms tick).
     const EPSILON: f32 = 0.002;
-    /// How long the bounce takes to play from start to resting size, in seconds.
-    pub const DURATION: f32 = 0.34;
-    /// Progress the outgoing card has decayed to by the time the bounce finishes.
+    /// How long the highlight takes to travel from one card to the next, in seconds.
+    ///
+    /// Was 0.34: with an ease-out curve that reaches ~0.7 at the half-way mark, the last
+    /// third of the travel was spread over a barely visible 0.17 s and the whole thing
+    /// read as slow rather than smooth. A short, decisive transition feels quicker at the
+    /// same frame rate; `anim_speed` still scales it from x0.5 to x5.
+    pub const DURATION: f32 = 0.18;
+    /// Highlight the outgoing card still carries when the incoming one has arrived.
     pub const REST_AFTER: f32 = 0.45;
+    /// How fast the outgoing highlight fades once the hand-off is over, in units/s.
+    pub const DECAY: f32 = 6.0;
+    /// Total time the clock has to run: the travel plus the outgoing decay.
+    ///
+    /// `REST_AFTER / DECAY` is the tail after the incoming card has already landed, so
+    /// the tick must not stop at `DURATION` — that would freeze the old highlight half-lit.
+    pub const SETTLE_TIME: f32 = Self::DURATION + Self::REST_AFTER / Self::DECAY;
 
-    /// Spring-ish approach towards `target`: fast at first, then a soft overshoot that
+    /// Whether a progress value has reached one of its two resting states.
     pub fn settled(value: f32) -> bool {
         value < Self::EPSILON || 1.0 - value < Self::EPSILON
-    }
-
-    /// Scale factor to apply to a card for a given progress value.
-    ///
-    /// `progress` runs 0 -> 1 for the card gaining focus. The curve overshoots to ~1.5%
-    /// past the target and eases back, so the selected card visibly "bounces" into place
-    /// while the one losing focus glides down without a jump.
-    pub fn scale(progress: f32) -> f32 {
-        let t = progress.clamp(0.0, 1.0);
-        // Ease out quickly, then lift past the resting size before settling back on it.
-        // The overshoot term peaks around a third of the way in and is exactly zero at
-        // t = 1, so the card starts at 1.0x, springs to ~1.072x, and lands on 1.05x.
-        let eased = 1.0 - (1.0 - t).powi(2);
-        let overshoot = Self::BOUNCE
-            * (std::f32::consts::PI * t.powf(0.75)).sin()
-            * (1.0 - t)
-            * 3.0;
-        1.0 + Self::GROWTH * eased + overshoot
     }
 }
 
@@ -114,21 +103,20 @@ impl Animation {
             return 1.0;
         }
         let t = (age / Self::DURATION).clamp(0.0, 1.0);
-        // Fast outset, long settle: 1 - (1-t)^3 reaches ~0.7 by the half-way mark.
-        1.0 - (1.0 - t).powi(3)
+        // Quartic ease-out: leaves immediately and settles by the third quarter, so there
+        // is no long, almost-still tail at the end of the travel.
+        1.0 - (1.0 - t).powi(4)
     }
 }
 
 /// Visual state of one card for a given animation style and progress value.
 ///
-/// The three effects are kept independent so a style can enable any combination of
-/// them; `Slide` uses `shift` alone, `Fade` uses `opacity` alone, and `ZoomFade` layers
-/// both size and opacity. Everything is centre-anchored, so a scaled card grows outwards
-/// from its middle instead of pushing its neighbours around.
+/// The two effects are kept independent so a style can enable either one: `Slide` uses
+/// `shift` alone and both fading styles use `opacity`. Cards never change size — every
+/// card occupies the same footprint at all times, so the row never reflows and the
+/// preview text is never resampled.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CardFx {
-    /// Scale factor about the card centre, `1.0` when the style does not scale.
-    pub scale:   f32,
     /// Opacity in `0.0..=1.0`, `1.0` when the style does not fade.
     pub opacity: f32,
     /// Horizontal offset in logical pixels, `0.0` when the style does not slide.
@@ -138,7 +126,7 @@ pub struct CardFx {
 impl CardFx {
     /// No effect at all — used by `AnimStyle::Off` and by every unselected card in a
     /// style that only decorates the selection.
-    pub const NONE: CardFx = CardFx { scale: 1.0, opacity: 1.0, shift: 0.0 };
+    pub const NONE: CardFx = CardFx { opacity: 1.0, shift: 0.0 };
 }
 
 impl Animation {
@@ -156,9 +144,6 @@ impl Animation {
         if !style.is_on() {
             return CardFx::NONE;
         }
-        // `scale` already carries the bounce/overshoot curve, so styles that grow reuse
-        // it unchanged and only add their own extras.
-        let scale = if style.scales() { Self::scale(p) } else { 1.0 };
         let opacity = if style.fades() {
             // Blend from the dimmed resting look to fully opaque as the card is selected.
             Self::DIM + (1.0 - Self::DIM) * p
@@ -173,7 +158,7 @@ impl Animation {
         } else {
             0.0
         };
-        CardFx { scale, opacity, shift }
+        CardFx { opacity, shift }
     }
 
     /// Opacity for the incoming card during the `Fade` style, which has no size change to
@@ -184,7 +169,7 @@ impl Animation {
             return 1.0;
         }
         let t = (age / Self::DURATION).clamp(0.0, 1.0);
-        Self::FADE_FROM + (1.0 - Self::FADE_FROM) * (1.0 - (1.0 - t).powi(3))
+        Self::FADE_FROM + (1.0 - Self::FADE_FROM) * (1.0 - (1.0 - t).powi(4))
     }
 }
 
@@ -306,23 +291,10 @@ impl Metrics {
         }
     }
 
-    /// Extra space reserved so a scaled-up (selected) card plus its ring still fits in
-    /// the surface: 5% growth on both axes plus a couple of pixels for the ring.
-    pub const GROWTH_PX: u32 = 24;
-
-    /// Card size while animating the selection. The neighbours keep the base size, so the
-    /// selected card is exactly `Animation::GROWTH` bigger at the end of the animation.
-    pub fn card_size_scaled(&self, scale: f32) -> (f32, f32) {
-        (
-            (self.card_w as f32 * scale).round(),
-            (self.card_h as f32 * scale).round(),
-        )
-    }
-
-    /// Ground size of a card and its interpolated size for the given progress value.
-    pub fn card_size_for(&self, progress: f32) -> (f32, f32) {
-        let (w, h) = self.card_size_scaled(Animation::scale(progress));
-        ((self.card_w as f32).max(w), (self.card_h as f32).max(h))
+    /// Footprint of a card. It does not depend on the animation any more: cards keep
+    /// their size and only their highlight, opacity and position animate.
+    pub fn card_size_for(&self, _progress: f32) -> (f32, f32) {
+        (self.card_w as f32, self.card_h as f32)
     }
 
     /// First visible entry index in a single-line row that scrolls.
@@ -490,9 +462,9 @@ fn grid(state: &AppSwitcher) -> Element<'_, Message> {
     cosmic::iced::widget::stack![scrim(tv.bg, state.style.blur_strength()), centred].into()
 }
 
-/// One preview card. The selected card is laid out `Animation::scale(progress)` larger
-/// than its neighbours and scales its contents to match, so the highlight grows smoothly
-/// while the switcher key is held.
+/// One preview card. The selected card is drawn larger only through its border and
+/// background; its geometry is identical to its neighbours' at every frame, so titles and
+/// previews never change size and never have to be re-laid out.
 #[allow(clippy::too_many_arguments)]
 fn card<'a>(
     state: &'a AppSwitcher,
@@ -509,30 +481,28 @@ fn card<'a>(
     let selected = index == state.selected;
     let icon_name = icon_name_for(&entry.app_id);
 
-    // Every card animates independently: the one gaining focus bounces up while the one
-    // losing focus glides back down. The style decides which effects take part, so an
-    // `Off` style yields frozen cards and a `Fade` style keeps every size constant.
+    // Every card animates independently: the one gaining focus fades/slides in while the
+    // one losing focus returns to rest. The style decides which effects take part, so an
+    // `Off` style yields frozen cards and `Fade` keeps every position constant.
     let progress = state.hover.get(index).copied().unwrap_or(0.0);
+    let anim_style_on = state.style.anim_style().is_on();
     let fx       = Animation::fx(state.style.anim_style(), progress);
-    let scale    = fx.scale;
     let (card_w, card_h) = m.card_size_for(progress);
 
-    // Everything inside the card is scaled by the same factor, which is what makes the
-    // extra 5% read as a real "zoom" rather than just a bigger empty box.
-    let thumb_w = (m.thumb_w as f32 * scale).round().max(1.0);
-    let thumb_h = (m.thumb_h as f32 * scale).round().max(1.0);
-    let title_h = (m.title_h as f32 * scale).round();
+    let thumb_w = m.thumb_w as f32;
+    let thumb_h = m.thumb_h as f32;
+    let title_h = m.title_h as f32;
 
-    let icon_radius = 8.0 * scale;
+    let icon_radius = 8.0;
     let thumb: Element<'a, Message> = match &state.thumbs[index] {
         Some(handle) => image(handle.clone())
             .width(Length::Fixed(thumb_w))
             .height(Length::Fixed(thumb_h))
             .content_fit(ContentFit::Contain)
-            .border_radius(8.0 * scale)
+            .border_radius(8.0)
             .into(),
         None => {
-            let icon_px = (46.0 * scale).round().max(16.0) as u16;
+            let icon_px = 46u16;
             let app_icon: Element<'a, Message> = icon::from_name(icon_name.as_str())
                 .size(icon_px)
                 .icon()
@@ -555,13 +525,13 @@ fn card<'a>(
     let title: Element<'a, Message> = if title_h < 8.0 {
         Space::new().height(Length::Fixed(0.0)).into()
     } else {
-        let icon_px = (16.0 * scale).round().max(12.0) as u16;
+        let icon_px = 16u16;
         let small_icon: Element<'a, Message> = icon::from_name(icon_name.as_str())
             .size(icon_px)
             .icon()
             .size(icon_px)
             .into();
-        let text_px = (13.0 * scale).round().max(10.0) as u16;
+        let text_px = 13u16;
         row![
             small_icon,
             // Wrap instead of clipping: long titles spill onto extra lines and every
@@ -572,13 +542,13 @@ fn card<'a>(
                 .wrapping(Wrapping::WordOrGlyph)
                 .class(cosmic::theme::Text::Color(text_col)),
         ]
-        .spacing((6.0 * scale).round())
+        .spacing(6.0)
         .align_y(Alignment::Center)
         .height(Length::Fixed(title_h))
         .into()
     };
 
-    let inner = column![thumb, title].spacing((4.0 * scale).round());
+    let inner = column![thumb, title].spacing(4.0);
 
     // iced in this tree has no generic opacity widget, so the fade is applied to the
     // card's own colours. Scaling every alpha by `fx.opacity` fades the body, border and
@@ -587,30 +557,46 @@ fn card<'a>(
     let a = fx.opacity.clamp(0.0, 1.0);
     let with_alpha = |c: Color| Color::from_rgba(c.r, c.g, c.b, c.a * a);
     let card_bg = with_alpha(card_bg);
-    let sel_bg = with_alpha(sel_bg);
-    let accent = with_alpha(accent);
+    let sel_bg  = with_alpha(sel_bg);
+    let accent  = with_alpha(accent);
 
-    let pad = (m.card_pad as f32 * scale).round();
+    // How "selected" the card looks, 0..=1. The highlight is the ring itself, so it has to
+    // follow `progress` rather than the boolean `selected`: driving it off the flag made
+    // the ring snap on and off, which is why `Highlight` looked like it did nothing at all
+    // once the size change was removed.
+    //
+    // The travelling part sits on the card that is leaving focus, while the incoming card
+    // already carries its final highlight. Two rings interpolating at once made the
+    // selection look like it was stuck mid-way for half the animation, which is what read
+    // as "slow".
+    let sel = if !anim_style_on {
+        if selected { 1.0 } else { 0.0 }
+    } else if selected {
+        1.0
+    } else {
+        progress.clamp(0.0, 1.0)
+    };
+    let sel_bg  = blend(card_bg, sel_bg, sel);
+    let ring_col = blend(Color::from_rgba(1.0, 1.0, 1.0, 0.06 * a), accent, sel);
+    let ring_w  = 1.0 + (border_w - 1.0) * sel;
+    let ring_w  = ring_w * sel.max(0.05).sqrt();
+
+    let pad = m.card_pad as f32;
     let cell = container(inner)
         .width(Length::Fixed(card_w))
         .height(Length::Fixed(card_h))
         .padding(pad)
         .style(move |_: &cosmic::Theme| ContainerStyle {
-            background: Some(Background::Color(if selected { sel_bg } else { card_bg })),
+            background: Some(Background::Color(sel_bg)),
             border: Border {
-                radius: (radius * scale + 2.0).into(),
-                width: if selected { border_w } else { 1.0 },
-                color: if selected {
-                    accent
-                } else {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.06 * a)
-                },
+                radius: (radius + 2.0).into(),
+                width: ring_w,
+                color: ring_col,
             },
             ..Default::default()
         });
 
-    // Fix the card footprint, then pin the close button to its top-right corner. The
-    // slot keeps every card the same size while the selected one grows.
+    // Fix the card footprint, then pin the close button to its top-right corner.
     let body: Element<'a, Message> = container(cell)
         .width(Length::Fixed(card_w))
         .height(Length::Fixed(card_h))
@@ -618,7 +604,7 @@ fn card<'a>(
 
     let slotted_raw: Element<'a, Message> = if state.style.show_close {
         let inset = (pad + radius * 0.35).round();
-        let btn = close_button(index, scale, state.hovered == Some(index));
+        let btn = close_button(index, state.hovered == Some(index));
         cosmic::iced::widget::stack![
             body,
             container(btn)
@@ -655,10 +641,22 @@ fn card<'a>(
         .into()
 }
 
+/// Linear blend between two colours, `t` clamped to 0..=1. Used to interpolate the
+/// selection ring so it fades across cards instead of switching between two looks.
+fn blend(from: Color, to: Color, t: f32) -> Color {
+    let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+    Color {
+        r: from.r + (to.r - from.r) * t,
+        g: from.g + (to.g - from.g) * t,
+        b: from.b + (to.b - from.b) * t,
+        a: from.a + (to.a - from.a) * t,
+    }
+}
+
 /// A material "close" button: a translucent dark circle with an × drawn from two thin
-/// bars. Built from primitives so it scales with the card and always matches the theme.
-fn close_button<'a>(index: usize, scale: f32, hovered: bool) -> Element<'a, Message> {
-    let d  = (CLOSE_D * scale).round().max(16.0);
+/// bars. Built from primitives so it always matches the theme and the card size.
+fn close_button<'a>(index: usize, hovered: bool) -> Element<'a, Message> {
+    let d  = CLOSE_D.round().max(16.0);
     let arm = d * 0.34;
     let fill = if hovered {
         Color::from_rgba(0.95, 0.36, 0.36, 0.95)
@@ -690,7 +688,7 @@ fn close_button<'a>(index: usize, scale: f32, hovered: bool) -> Element<'a, Mess
 
 /// The × glyph. A canvas is used on purpose: iced has no rotation transform, so two
 /// crossing rectangles would only ever render a "+". Painting the glyph gives a proper
-/// material-style close cross that stays crisp at any card scale.
+/// material-style close cross that stays crisp at any size.
 struct Cross {
     arm:   f32,
     alpha: f32,
@@ -826,25 +824,18 @@ mod tests {
     }
 
     #[test]
-    fn bouncing_scale_peaks_above_final_growth() {
-        let peak = (0..=100)
-            .map(|i| Animation::scale(i as f32 / 100.0))
-            .fold(0.0f32, f32::max);
-        let final_scale = Animation::scale(1.0);
-        assert!(peak > final_scale, "curve must overshoot to read as a bounce");
-        // The overshoot stays subtle: it peaks a couple of percent past the resting size,
-        // so the card springs without appearing to zoom.
-        assert!(
-            peak < 1.0 + Animation::GROWTH + Animation::BOUNCE,
-            "peak {peak} should stay within growth plus bounce"
-        );
-        assert!(peak > 1.0 + Animation::GROWTH + Animation::BOUNCE * 0.5);
-    }
-
-    #[test]
-    fn scale_rests_at_exactly_one_and_growth_at_the_end() {
-        assert!((Animation::scale(0.0) - 1.0).abs() < 1e-6);
-        assert!((Animation::scale(1.0) - (1.0 + Animation::GROWTH)).abs() < 1e-6);
+    fn cards_keep_their_size_whatever_the_progress() {
+        // The selected card must not grow: the footprint is the base size for every
+        // possible progress value, so the row never reflows and text never resamples.
+        let style = Style { layout: Layout::Row, ..Style::default() };
+        let screen = Screen { width: 2560, height: 1440 };
+        let titles: Vec<String> = vec!["window".into(); 3];
+        let m = Metrics::fit(&style, screen, 3, &titles);
+        let base = (m.card_w as f32, m.card_h as f32);
+        for i in 0..=100 {
+            let size = m.card_size_for(i as f32 / 100.0);
+            assert_eq!(size, base, "card changed size at progress {}", i as f32 / 100.0);
+        }
     }
 }
 
@@ -882,14 +873,14 @@ mod animation_tests {
                 *v = if i == self.selected {
                     Animation::rise(age)
                 } else if i == self.from {
-                    (Animation::REST_AFTER - age * 1.6).max(0.0)
+                    (Animation::REST_AFTER - age * Animation::DECAY).max(0.0)
                 } else {
                     0.0
                 };
             }
         }
         fn settled(&self) -> bool {
-            let running = self.age.map(|a| a < Animation::DURATION).unwrap_or(false);
+            let running = self.age.map(|a| a < Animation::SETTLE_TIME).unwrap_or(false);
             !running
         }
     }
@@ -919,18 +910,43 @@ mod animation_tests {
     }
 
     #[test]
-    fn bounce_overshoots_then_rests_exactly_on_the_growth() {
+    fn rise_climbs_monotonically_and_rests_exactly_on_one() {
         let dt = 1.0 / 120.0;
         let mut c = Clock::new(3);
         c.select(1);
-        let mut peak = 0.0f32;
+        let mut prev = 0.0f32;
         for _ in 0..(Animation::DURATION / dt) as usize + 4 {
             c.tick(dt);
-            peak = peak.max(Animation::scale(c.hover[1]));
+            assert!(c.hover[1] >= prev, "progress went backwards: {prev} -> {}", c.hover[1]);
+            prev = c.hover[1];
         }
         assert!(Animation::rise(Animation::DURATION) == 1.0);
         assert!((Animation::rise(1e6) - 1.0).abs() < 1e-6, "must not drift past 1.0");
-        assert!(peak > 0.0, "peak should be measured");
+    }
+
+    #[test]
+    fn the_outgoing_highlight_finishes_its_decay() {
+        // The tick stops at `SETTLE_TIME`; if the decay were still running then, the old
+        // card would be frozen half-lit for good.
+        let dt = 1.0 / 60.0;
+        let mut c = Clock::new(3);
+        c.select(1);
+        let mut steps = 0;
+        while !c.settled() {
+            c.tick(dt);
+            steps += 1;
+            assert!(steps < 1000, "the clock never stopped");
+        }
+        assert_eq!(c.hover[c.from], 0.0, "outgoing card must have fully faded by then");
+        assert_eq!(c.age.map(|a| a <= Animation::SETTLE_TIME + dt), Some(true));
+    }
+
+    #[test]
+    fn the_animation_is_short_enough_to_feel_immediate() {
+        // The complaint was that the transition felt slow: half a second of travel reads
+        // as lag regardless of the frame rate.
+        assert!(Animation::DURATION <= 0.25, "travel takes {}s", Animation::DURATION);
+        assert!(Animation::SETTLE_TIME <= 0.35, "settling takes {}s", Animation::SETTLE_TIME);
     }
 
     #[test]
@@ -1073,16 +1089,17 @@ mod anim_style_tests {
     fn off_style_has_no_effect_at_all() {
         for p in [0.0f32, 0.5, 1.0] {
             let fx = Animation::fx(AnimStyle::Off, p);
-            assert_eq!(fx, CardFx::NONE, "Off must not scale, fade or shift at p={p}");
+            assert_eq!(fx, CardFx::NONE, "Off must not fade or shift at p={p}");
         }
     }
 
-    /// `Fade` must leave geometry alone, otherwise it would reflow the row on every press.
+    /// `Fade` must leave the position alone, otherwise it would reflow the row on every
+    /// press. Size is constant for every style, so it needs no assertion here beyond the
+    /// fact that `CardFx` no longer carries one.
     #[test]
-    fn fade_style_never_scales_or_shifts() {
+    fn fade_style_never_shifts() {
         for p in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
             let fx = Animation::fx(AnimStyle::Fade, p);
-            assert!((fx.scale - 1.0).abs() < 1e-6, "fade changed the scale at p={p}");
             assert_eq!(fx.shift, 0.0, "fade changed the offset at p={p}");
         }
     }
@@ -1094,11 +1111,6 @@ mod anim_style_tests {
             let fx = Animation::fx(style, 1.0);
             assert!((fx.opacity - 1.0).abs() < 1e-6, "{style:?} did not reach full opacity");
             assert_eq!(fx.shift, 0.0, "{style:?} did not return to its resting offset");
-            if style.scales() {
-                assert!((fx.scale - Animation::scale(1.0)).abs() < 1e-6);
-            } else {
-                assert!((fx.scale - 1.0).abs() < 1e-6);
-            }
         }
     }
 
@@ -1132,9 +1144,26 @@ mod anim_style_tests {
     }
 
     /// Non-finite progress must not produce NaN colours or sizes.
+    /// The visible highlight is the ring, so it must interpolate with `progress`. Driving
+    /// it off the boolean `selected` made the ring snap and left `Highlight` looking like
+    /// it had no animation at all after the size change was removed.
+    #[test]
+    fn blend_walks_the_whole_way_and_holds_the_ends() {
+        let a = Color::from_rgba(0.0, 0.0, 0.0, 1.0);
+        let b = Color::from_rgba(1.0, 0.5, 0.25, 1.0);
+        assert_eq!(blend(a, b, 0.0).r, 0.0);
+        assert_eq!(blend(a, b, 1.0).r, 1.0);
+        let mid = blend(a, b, 0.5);
+        assert!((mid.r - 0.5).abs() < 1e-6 && (mid.g - 0.25).abs() < 1e-6);
+        // Out-of-range and NaN progress must not produce a broken colour.
+        assert_eq!(blend(a, b, 7.0).r, 1.0);
+        assert_eq!(blend(a, b, -3.0).r, 0.0);
+        assert_eq!(blend(a, b, f32::NAN).r, 0.0);
+    }
+
     #[test]
     fn non_finite_progress_falls_back_to_the_resting_look() {
         let fx = Animation::fx(AnimStyle::Fade, f32::NAN);
-        assert!(fx.opacity.is_finite() && fx.scale.is_finite() && fx.shift.is_finite());
+        assert!(fx.opacity.is_finite() && fx.shift.is_finite());
     }
 }

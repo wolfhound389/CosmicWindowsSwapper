@@ -88,51 +88,56 @@ impl RowMode {
 
 /// How the selection moves between cards.
 ///
-/// These are the four transitions that every mainstream switcher ships with, plus an
-/// explicit "Off". They are picked because they are the ones users already know:
+/// Cards never change size: every style keeps the same footprint so the row does not
+/// reflow and previews are never resampled. What travels is the highlight — an accent
+/// ring growing around the newly focused card — optionally with a fade or a slide:
 ///
-/// * `Zoom` — Windows `Alt`+`Tab` and macOS `Cmd`+`Tab`: the selected window grows a
-///   little and its neighbours spring back. This is the historical default here.
+/// * `Highlight` — the accent ring expands from the old card to the new one. The
+///   historical behaviour here and the closest thing to Windows `Alt`+`Tab`.
 /// * `Fade` — GNOME/KDE task switchers: the new selection fades in solid while the old
 ///   one dims out. The calmest option and the cheapest to render.
 /// * `Slide` — KDE `Alt`+`Tab` "cover flow"/slideshow and macOS Stage Manager: the
 ///   previews shift sideways so motion follows the arrow keys.
-/// * `Zoom Fade` — the combination used by modern Android and COSMIC window
-///   transitions: scale and opacity move together.
+/// * `Highlight Fade` — the combination used by modern Android and COSMIC window
+///   transitions: the ring and the opacity move together.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AnimStyle {
     /// No animation at all: the selection is redrawn instantly on every key press.
     Off,
-    /// Selected card grows, neighbours shrink (Windows / macOS default).
+    /// Accent ring and background travel to the selected card (Windows-like default).
+    /// `Zoom` is accepted when deserialising so configs written before the card zoom was
+    /// removed keep their animation instead of silently falling back to the default.
     #[default]
-    Zoom,
-    /// Opacity only, no size change (GNOME / KDE).
+    #[serde(alias = "Zoom")]
+    Highlight,
+    /// Opacity only, no movement (GNOME / KDE).
     Fade,
     /// Cards shift sideways, size unchanged (KDE slideshow / Stage Manager).
     Slide,
-    /// Scale and opacity together (Android / COSMIC transitions).
-    ZoomFade,
+    /// Ring and opacity together (Android / COSMIC transitions).
+    #[serde(alias = "ZoomFade")]
+    HighlightFade,
 }
 
 impl AnimStyle {
     pub fn label(&self) -> &'static str {
         match self {
-            AnimStyle::Off      => "Off",
-            AnimStyle::Zoom     => "Zoom",
-            AnimStyle::Fade     => "Fade",
-            AnimStyle::Slide    => "Slide",
-            AnimStyle::ZoomFade => "Zoom + fade",
+            AnimStyle::Off           => "Off",
+            AnimStyle::Highlight     => "Highlight",
+            AnimStyle::Fade          => "Fade",
+            AnimStyle::Slide         => "Slide",
+            AnimStyle::HighlightFade => "Highlight + fade",
         }
     }
 
     /// One-line description shown under the dropdown in the settings applet.
     pub fn description(&self) -> &'static str {
         match self {
-            AnimStyle::Off      => "No animation at all — instant response",
-            AnimStyle::Zoom     => "Selected window grows a little (Windows, macOS)",
-            AnimStyle::Fade     => "Selected window fades in, the rest dim (GNOME, KDE)",
-            AnimStyle::Slide    => "Selected window slides sideways (KDE, Stage Manager)",
-            AnimStyle::ZoomFade => "Grows and fades at the same time (Android, COSMIC)",
+            AnimStyle::Off           => "No animation at all — instant response",
+            AnimStyle::Highlight     => "Highlight travels to the selected window (Windows, macOS)",
+            AnimStyle::Fade          => "Selected window fades in, the rest dim (GNOME, KDE)",
+            AnimStyle::Slide         => "Selected window slides sideways (KDE, Stage Manager)",
+            AnimStyle::HighlightFade => "Highlight and fade at the same time (Android, COSMIC)",
         }
     }
 
@@ -143,14 +148,9 @@ impl AnimStyle {
         !matches!(self, AnimStyle::Off)
     }
 
-    /// Does this style change the card size (and therefore the layout)?
-    pub fn scales(&self) -> bool {
-        matches!(self, AnimStyle::Zoom | AnimStyle::ZoomFade)
-    }
-
     /// Does this style change the card opacity?
     pub fn fades(&self) -> bool {
-        matches!(self, AnimStyle::Fade | AnimStyle::ZoomFade)
+        matches!(self, AnimStyle::Fade | AnimStyle::HighlightFade)
     }
 
     /// Does this style move the cards horizontally without changing their size?
@@ -162,10 +162,10 @@ impl AnimStyle {
     pub fn all() -> [AnimStyle; 5] {
         [
             AnimStyle::Off,
-            AnimStyle::Zoom,
+            AnimStyle::Highlight,
             AnimStyle::Fade,
             AnimStyle::Slide,
-            AnimStyle::ZoomFade,
+            AnimStyle::HighlightFade,
         ]
     }
 
@@ -611,7 +611,7 @@ mod old_config_tests {
         assert_eq!(s.blur_strength(), 0.20);
         // Fields added even later must also default, or an upgrade would silently reset
         // a user's layout: the miss turns the whole parse into `None` upstream.
-        assert_eq!(s.anim_style(), AnimStyle::Zoom);
+        assert_eq!(s.anim_style(), AnimStyle::Highlight);
         assert!(s.enabled());
     }
 
@@ -642,7 +642,7 @@ mod old_config_tests {
         assert_eq!(s.anim_speed(), 2.0);
         assert_eq!(s.blur_strength(), 0.3);
         // Only the new fields take defaults.
-        assert_eq!(s.anim_style(), AnimStyle::Zoom);
+        assert_eq!(s.anim_style(), AnimStyle::Highlight);
         assert!(s.enabled());
     }
 
@@ -692,17 +692,32 @@ mod anim_style_tests {
 
     #[test]
     fn effect_flags_match_the_advertised_behaviour() {
-        assert!(AnimStyle::Zoom.scales() && !AnimStyle::Zoom.fades());
-        assert!(AnimStyle::Fade.fades() && !AnimStyle::Fade.scales());
-        assert!(AnimStyle::Slide.shifts() && !AnimStyle::Slide.scales());
-        assert!(AnimStyle::ZoomFade.scales() && AnimStyle::ZoomFade.fades());
+        assert!(!AnimStyle::Highlight.fades() && !AnimStyle::Highlight.shifts());
+        assert!(AnimStyle::Fade.fades() && !AnimStyle::Fade.shifts());
+        assert!(AnimStyle::Slide.shifts() && !AnimStyle::Slide.fades());
+        assert!(AnimStyle::HighlightFade.fades() && !AnimStyle::HighlightFade.shifts());
     }
 
     #[test]
     fn default_style_keeps_the_existing_look() {
         // Users who upgrade must not see their switcher change appearance.
-        assert_eq!(Style::default().anim_style(), AnimStyle::Zoom);
+        assert_eq!(Style::default().anim_style(), AnimStyle::Highlight);
         assert_eq!(Style::default().anim_style(), AnimStyle::default());
+    }
+
+    /// Configs written before the card zoom was removed name the styles `Zoom` and
+    /// `ZoomFade`. They must load as the equivalent styles, not fail the whole parse —
+    /// a failed parse makes `read_style` fall back to the default and wipe the layout.
+    #[test]
+    fn legacy_zoom_names_still_load() {
+        assert_eq!(ron::from_str::<AnimStyle>("Zoom").unwrap(), AnimStyle::Highlight);
+        assert_eq!(ron::from_str::<AnimStyle>("ZoomFade").unwrap(), AnimStyle::HighlightFade);
+        // The new names keep working too.
+        assert_eq!(ron::from_str::<AnimStyle>("Highlight").unwrap(), AnimStyle::Highlight);
+        assert_eq!(
+            ron::from_str::<AnimStyle>("HighlightFade").unwrap(),
+            AnimStyle::HighlightFade
+        );
     }
 
     #[test]

@@ -23,6 +23,10 @@ use switcher_config::{Layout, Style, Theme, ThemeValues};
 use crate::ui::{Animation, Metrics};
 use crate::wayland::{Command, Switcher, ThumbEvent, ToplevelEntry};
 
+/// Slack around the panel on the layer surface: enough for the accent ring and its glow
+/// to draw without clipping, while staying constant so the surface never resizes.
+const RING_MARGIN: u32 = 24;
+
 pub struct AppSwitcher {
     core:        Core,
     pub entries: Vec<ToplevelEntry>,
@@ -41,15 +45,16 @@ pub struct AppSwitcher {
     test_deadline: Option<Instant>,
     finished:     bool,
     /// Per-card selection animation progress, indexed like `entries`. Each card owns its
-    /// own value so the card that loses focus can shrink smoothly at the same time as the
-    /// newly focused one bounces up, instead of snapping back to its resting size.
+    /// own value so the card that loses focus can fade/slide out smoothly at the same time
+    /// as the newly focused one eases in, instead of snapping to its final look.
     pub hover:    Vec<f32>,
     /// Time elapsed since the current focus change, in seconds. Restarted by every key
-    /// that moves focus, which is what makes the "smooth bouncing" replay on each press
-    /// instead of running once after startup. `None` until the first move.
+    /// that moves focus, which is what makes the transition replay on each press instead
+    /// of running once after startup. `None` until the first move.
     pub bounce_age: Option<f32>,
-    /// Card index the current bounce belongs to, so the animation can be restarted even
-    /// when the same card is selected twice in a row (e.g. wrapping around).
+    /// Card index the current transition is coming from, so the animation can be
+    /// restarted even when the same card is selected twice in a row (e.g. wrapping
+    /// around).
     pub bounce_from: usize,
     /// Set right after Super/Alt+Q so the following modifier release does not commit the
     /// switch (see the `ModifiersChanged` arm).
@@ -109,16 +114,20 @@ fn test_mode() -> Option<Duration> {
 }
 
 impl AppSwitcher {
-    /// Move focus to `index` and restart the "smooth bouncing" animation from the
-    /// beginning. Every key that changes the selection goes through here, so holding the
-    /// modifier and tapping Tab replays the bounce on *each* press.
+    /// Move focus to `index` and restart the highlight animation from the beginning.
+    /// Every key that changes the selection goes through here, so holding the modifier
+    /// and tapping Tab replays the transition on *each* press.
     fn select_at(&mut self, index: usize) {
         if index != self.selected {
             self.bounce_from = self.selected;
         }
         self.selected = index;
         // Reset the clock so the easing always starts at 0 whatever the previous state.
+        // `last_tick` moves too: without this the first frame after an idle period is
+        // credited with the whole gap since the previous animation, which made the
+        // transition skip several frames at once and read as laggy.
         self.bounce_age = Some(0.0);
+        self.last_tick = Instant::now();
     }
 
 }
@@ -143,13 +152,14 @@ impl Application for AppSwitcher {
         let titles: Vec<String> = entries.iter().map(|e| e.title.clone()).collect();
         let metrics = Metrics::fit(&style, screen, n, &titles);
 
-        // The surface is sized to the panel (plus room for the selection growing), and
+        // The surface is sized to the panel plus a small margin for the accent ring, and
         // the content inside it is centred on both axes, which is what puts the panel in
-        // the middle of the screen.
+        // the middle of the screen. Cards no longer grow on selection, so the margin is
+        // constant and does not depend on the animation.
         let (surface_w, surface_h) = match style.layout {
             Layout::Grid | Layout::Row => {
                 let (w, h) = metrics.panel_size();
-                (w + Metrics::GROWTH_PX, h + Metrics::GROWTH_PX)
+                (w + RING_MARGIN, h + RING_MARGIN)
             }
             Layout::Strip => {
                 let icon = theme_preset.values().icon_size as u32;
@@ -274,8 +284,8 @@ impl Application for AppSwitcher {
             Message::AnimTick => {
                 let dt = (Instant::now() - self.last_tick).as_secs_f32().clamp(0.0, 0.1);
                 self.last_tick = Instant::now();
-                // The bounce is driven by a clock that restarts on each focus change, so
-                // the easing plays from the beginning every time Tab is pressed.
+                // The transition is driven by a clock that restarts on each focus change,
+                // so the easing plays from the beginning every time Tab is pressed.
                 // Scale elapsed time by the user's speed setting, so x0.5 plays at half
                 // speed and x5 five times faster while the curve itself stays identical.
                 let speed = self.style.anim_speed();
@@ -294,12 +304,12 @@ impl Application for AppSwitcher {
                         *value = if i == self.selected { 1.0 } else { 0.0 };
                         continue;
                     }
-                    // The dwell lets the outgoing card shrink a touch before the incoming
-                    // one springs, which reads as a bounce rather than a cross-fade. Slide
-                    // has no size change to hide behind, so the outgoing card is released
-                    // immediately instead of waiting out the dwell.
+                    // The dwell lets the outgoing card keep its highlight for a moment
+                    // before it dims, which reads as a hand-off rather than a cross-fade.
+                    // Slide has no highlight to hand over, so the outgoing card is
+                    // released immediately instead of waiting out the dwell.
                     if i == self.selected {
-                        *value = if anim_style.fades() && !anim_style.scales() {
+                        *value = if anim_style.fades() {
                             Animation::fade_in(age)
                         } else {
                             Animation::rise(age)
@@ -308,7 +318,7 @@ impl Application for AppSwitcher {
                         *value = if anim_style.shifts() {
                             0.0
                         } else {
-                            (Animation::REST_AFTER - age * 1.6).max(0.0)
+                            (Animation::REST_AFTER - age * Animation::DECAY).max(0.0)
                         };
                     } else {
                         *value = 0.0;
@@ -511,13 +521,15 @@ impl Application for AppSwitcher {
             cosmic::iced::time::every(Duration::from_millis(25)).map(|_| Message::Tick)
         };
 
-        // Drive the selection "pop" animation until it settles.
+        // Drive the highlight animation until it settles.
         // Keep ticking for as long as the bounce clock is running. Checking the clock
         // rather than the settled values is what stops the animation from dying after the
         // first play and never restarting.
         let running = self
             .bounce_age
-            .map(|age| age < Animation::DURATION)
+            // The outgoing card keeps decaying past `DURATION`, so the clock has to run a
+            // little longer or the tick would stop mid-decay and leave it half-lit.
+            .map(|age| age < Animation::SETTLE_TIME)
             .unwrap_or(false);
         let anim_sub = if !running && self.hover.len() >= self.entries.len() && self.hover.iter().all(|v| Animation::settled(*v)) {
             Subscription::none()

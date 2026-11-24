@@ -110,7 +110,7 @@ fn migrate_config_once() {
     }
 }
 
-/// Path of the shared config file the overlay also reads (`style` lives there).
+/// Path of the file the overlay reads for `style` (cosmic-config's per-key store).
 fn config_file() -> Option<std::path::PathBuf> {
     let base = std::env::var("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
@@ -120,28 +120,56 @@ fn config_file() -> Option<std::path::PathBuf> {
         base.join("cosmic")
             .join(APP_ID)
             .join(format!("v{CONFIG_VERSION}"))
-            .join(format!("{APP_ID}.ron")),
+            .join("style"),
     )
 }
 
-/// Read the `style` field out of that file, ignoring the other keys.
+/// Read the `style` value the overlay would load.
+///
+/// cosmic-config stores every key as its own file holding a bare RON value, so this is
+/// just a plain value — no `style:` wrapper, no surrounding map.
 fn read_style() -> Option<Style> {
     let text = std::fs::read_to_string(config_file()?).ok()?;
-    let start = text.find("style:")? + "style:".len();
-    let rest = &text[start..];
-    // The value ends at the line's trailing comma; anything else is a broken file.
-    let end = rest.find(",\n").or_else(|| rest.find(','))?;
-    ron::from_str::<Style>(rest[..end].trim()).ok()
+    ron::from_str::<Style>(text.trim()).ok()
 }
 
-/// Rewrite just the `style` field, leaving every other key in the file untouched.
+/// Write the `style` value exactly as cosmic-config would, so the next overlay launch
+/// picks it up.
 ///
-/// The file is edited as text on purpose: round-tripping it through `ron::Value` loses
-/// information (unit enum variants such as `Dark` come back as `()`, so the theme would
-/// be silently reset every time the popup is used).
+/// This used to edit the legacy `{APP_ID}.ron` map instead, which cosmic-config ignores
+/// once it has migrated to per-key files: every control in the popup saved happily and
+/// the overlay never saw a thing. The `.ron` file is still rewritten when it exists so an
+/// older binary keeps working.
 fn write_style(style: &Style) -> Result<(), String> {
+    // Pretty on purpose: cosmic-config rewrites these files itself and its own encoder is
+    // the multi-line form, so matching it keeps diffs to zero when the daemon touches them.
+    let encoded = ron::ser::to_string_pretty(style, ron::ser::PrettyConfig::default())
+        .map_err(|e| e.to_string())?;
+    write_value(&encoded)?;
+    let _ = write_legacy_style(style);
+    Ok(())
+}
+
+fn write_value(encoded: &str) -> Result<(), String> {
     let path = config_file().ok_or("no config directory")?;
-    let existing = std::fs::read_to_string(&path).unwrap_or_else(|_| "{\n}\n".to_owned());
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, encoded).map_err(|e| e.to_string())
+}
+
+/// Keep the old single-file config in sync for older builds of the overlay.
+fn write_legacy_style(style: &Style) -> Result<(), String> {
+    let path = legacy_config_file().ok_or("no config directory")?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let existing = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    if !existing.contains("style:") {
+        return Ok(());
+    }
+    // Single line on purpose: a multi-line value would change the shape older readers
+    // expect from this file.
     let encoded = ron::ser::to_string(style).map_err(|e| e.to_string())?;
 
     let mut body = String::new();
@@ -157,16 +185,20 @@ fn write_style(style: &Style) -> Result<(), String> {
         body.push_str(line);
         body.push('\n');
     }
-    if !written {
-        // First write: put it just before the closing brace of the map.
-        let insert_at = body.trim_end().rfind('}').unwrap_or(body.len());
-        body.insert_str(insert_at, &format!("    style: {encoded},\n"));
-    }
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     std::fs::write(&path, body).map_err(|e| e.to_string())
+}
+
+fn legacy_config_file() -> Option<std::path::PathBuf> {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+        .ok()?;
+    Some(
+        base.join("cosmic")
+            .join(APP_ID)
+            .join(format!("v{CONFIG_VERSION}"))
+            .join(format!("{APP_ID}.ron")),
+    )
 }
 
 fn shortcut_is_configured() -> bool {
@@ -266,11 +298,14 @@ fn do_register_shortcut() -> Result<(), String> {
 
 impl AppletApp {
     /// Persist the edited `Style` so the next overlay launch picks it up.
+    ///
+    /// This must write to the *overlay's* config (`APP_ID`), not the applet's own: the
+    /// overlay calls `Config::new(APP_ID, CONFIG_VERSION)` and would never see a `style`
+    /// stored under `APPLET_ID`. Writing through our own handler was the reason every
+    /// settings change silently did nothing, so the file is now edited directly.
     fn save_style(&self) {
-        if let Some(handler) = &self.config_handler {
-            let _ = handler.set("style", &self.current_style);
-        } else {
-            let _ = write_style(&self.current_style);
+        if let Err(e) = write_style(&self.current_style) {
+            eprintln!("cosmic-applet-windows-swapper: could not save style: {e}");
         }
     }
 
@@ -818,43 +853,55 @@ impl Application for AppletApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{rebuild_shortcut_map, Style};
+    use super::{config_file, rebuild_shortcut_map, Style, APPLET_ID};
+    use switcher_config::{AnimStyle, APP_ID};
 
     const CMD: &str = "/home/u/.local/bin/cosmic-windows-swapper";
 
-        #[test]
-    fn style_write_keeps_the_rest_of_the_file() {
-        let dir = std::env::temp_dir().join(format!("cws-style-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cfg.ron");
+    /// Whatever we write must parse back through the same call the overlay makes:
+    /// `Config::get::<Style>("style")` reads one bare RON value from one file.
+    #[test]
+    fn the_style_file_round_trips_like_cosmic_config_reads_it() {
+        let style = Style {
+            anim_style: AnimStyle::Slide,
+            anim_speed: 2.5,
+            ..Style::default()
+        };
+        let encoded = ron::ser::to_string_pretty(&style, ron::ser::PrettyConfig::default()).unwrap();
+        let back = ron::from_str::<Style>(encoded.trim()).expect("the value parses back");
+        assert_eq!(back, style);
+        // No map wrapper: the file holds the value alone, so a surrounding `{ }` would
+        // fail this parse exactly as it fails in production. (The bare field named
+        // `anim_style:` is fine — only a leading `style:` would be a wrapper.)
+        // (`Style` is encoded as a bare RON struct — `(` ... `)` is the value itself, not a
+        // map.)
+        assert!(!encoded.trim_start().starts_with('{'), "value must not be a map: {encoded}");
+        assert!(!encoded.contains("style: ("), "must not be a map entry: {encoded}");
+    }
 
-        // A file as COSMIC writes it: bare enum variant, plus keys we must not disturb.
-        std::fs::write(&path, "{\n    theme: Dark,\n    workspace_scope: AllWorkspaces,\n}\n").unwrap();
-        let style = Style::default().with_size(220, 125);
-        let encoded = ron::ser::to_string(&style).unwrap();
+    /// The `style` key has to live in the overlay's own per-key file. cosmic-config keeps
+    /// one file per key, so writing the legacy `{APP_ID}.ron` map — which is what the
+    /// applet used to do — is invisible to `Config::get::<Style>("style")`.
+    #[test]
+    fn style_lands_in_the_per_key_file_the_overlay_reads() {
+        let path = config_file().expect("config path");
+        assert_eq!(path.file_name().unwrap(), "style", "got {}", path.display());
+        assert!(
+            path.to_string_lossy().contains("CosmicWindowsSwapper/v1"),
+            "style must land in the overlay's dir, got {}",
+            path.display()
+        );
+        assert!(
+            !path.to_string_lossy().contains(APPLET_ID),
+            "style must not land in the applet's dir, got {}",
+            path.display()
+        );
+    }
 
-        let existing = std::fs::read_to_string(&path).unwrap();
-        let mut body = String::new();
-        for line in existing.lines() {
-            body.push_str(line);
-            body.push('\n');
-        }
-        let insert_at = body.trim_end().rfind('}').unwrap();
-        body.insert_str(insert_at, &format!("    style: {encoded},\n"));
-        std::fs::write(&path, &body).unwrap();
-
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("theme: Dark"));
-        assert!(text.contains("workspace_scope: AllWorkspaces"));
-        // Anchored to the line start so fields whose names merely end in "style" (such as
-        // `anim_style`) do not count as a second key.
-        assert_eq!(text.matches("\n    style:").count(), 1, "{text}");
-        // The whole file must still parse as a RON map.
-        let parsed = ron::from_str::<ron::Value>(&text).expect("file parses");
-        assert!(matches!(parsed, ron::Value::Map(_)));
-
-        std::fs::remove_dir_all(&dir).ok();
+    #[test]
+    fn the_applet_keeps_its_own_id() {
+        assert_eq!(APP_ID, "io.github.wolfhound389.CosmicWindowsSwapper");
+        assert_ne!(APP_ID, APPLET_ID, "the applet has its own id by design");
     }
 
     fn assert_well_formed(s: &str) {

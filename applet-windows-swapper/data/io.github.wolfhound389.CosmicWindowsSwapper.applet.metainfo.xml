@@ -44,6 +44,14 @@
     <!-- The newest entry here is the version the COSMIC Store displays. Keep it in sync
          with [workspace.package] version in Cargo.toml and the git tag; the release
          workflow refuses to publish when they disagree. -->
+    <release version="0.1.9" date="2026-11-25">
+      <description>
+        <p>Settings changed in the applet now actually reach the switcher. The applet was writing to the config file cosmic-config no longer reads, so every dropdown — animation style, layout, preview size — appeared to do nothing. It now writes the per-key file the overlay loads.</p>
+        <p>The focus animation is much quicker: a hand-off takes 0.18 s instead of 0.34 s, and the slow tail that made the switcher feel laggy is gone.</p>
+        <p>The selection ring now hands over instead of both rings fading at once, and it no longer stops half-lit on the outgoing card.</p>
+        <p>Cards keep a fixed size, so the row never reflows and text never resamples during a transition.</p>
+      </description>
+    </release>
     <release version="0.1.8" date="2026-10-28">
       <description>
         <p>The animation is now chosen from a dropdown in the applet: zoom, fade, slide, zoom with fade, or off. Turning it off makes the switcher respond instantly instead of waiting for a transition.</p>
